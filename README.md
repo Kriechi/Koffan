@@ -190,7 +190,7 @@ docker compose -f docker-compose.local.yaml up -d
 | `LOGIN_LOCKOUT_MINUTES` | `30` | Lockout duration after exceeding limit |
 | `API_TOKEN` | *(disabled)* | Enable REST API with this token ([docs](https://github.com/PanSalut/Koffan/wiki/REST-API)) |
 | `MULTI_USER` | `false` | Set to exactly `true` to enable accounts and workspaces ([see below](#accounts-and-workspaces-optional)); ignored when `DISABLE_AUTH=true` |
-| `ADMIN_USER` | `admin` | With `MULTI_USER`: username of the first administrator, created on the first start with accounts enabled, using `APP_PASSWORD` (which must not be the built-in default) |
+| `ADMIN_USER` | `admin` | With `MULTI_USER`: username of the first administrator, created on the first start with accounts enabled, using `APP_PASSWORD` |
 | `API_WORKSPACE_ID` | `1` | With `MULTI_USER`: id of the workspace the REST API token works on ([details](#rest-api-and-webhooks-with-accounts)); ignored without `MULTI_USER` |
 | `WEBHOOK_URL` | *(disabled)* | HTTP or HTTPS endpoint for outbound item events |
 | `WEBHOOK_SECRET` | *(none)* | Secret used to sign webhook payloads with HMAC-SHA256 |
@@ -203,7 +203,7 @@ By default Koffan has one shared password and behaves exactly as before. Set `MU
 #### Turning accounts on
 
 1. Back up your database file (see [Upgrading](#upgrading)).
-2. Set `MULTI_USER=true` and your own `APP_PASSWORD` (at least 8 characters, not the built-in default `shopping123`). Optionally set `ADMIN_USER` (default `admin`).
+2. Set `MULTI_USER=true` and your own `APP_PASSWORD` (at least 8 characters). Optionally set `ADMIN_USER` (default `admin`). If `APP_PASSWORD` is still the built-in default `shopping123`, the administrator gets that password and the log shows a warning: change it right after signing in.
 3. Restart Koffan and look for `Created administrator "admin"` in the log. Everyone signed in with the shared password is signed out.
 4. Sign in as the administrator and open *Manage workspaces* from the workspace menu in the header. Create an account for each person and keep *Add to the current workspace* ticked to put them in "Home", the default workspace that holds all your existing lists.
 
