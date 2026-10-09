@@ -82,13 +82,13 @@ func main() {
 			if len(password) < handlers.MinPasswordLength {
 				log.Fatalf("MULTI_USER=true needs APP_PASSWORD (at least %d characters) to create the first administrator", handlers.MinPasswordLength)
 			}
-			if password == handlers.DefaultPassword {
-				log.Fatal("APP_PASSWORD is the built-in default password: choose your own before enabling accounts")
-			}
 			if err := db.EnsureBootstrapAdmin(admin, password); err != nil {
 				log.Fatalf("Could not create the first administrator: %v", err)
 			}
 			log.Printf("Created administrator %q with the password from APP_PASSWORD", admin)
+			if password == handlers.DefaultPassword {
+				log.Printf("WARNING: administrator %q uses the built-in default password; sign in and change it under Your account on the Workspaces page", admin)
+			}
 		}
 	}
 
