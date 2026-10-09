@@ -110,13 +110,13 @@ func PrepareListItemWebhooks(event string, listID int64) []PreparedItemWebhook {
 	return PrepareItemWebhooks(event, SnapshotListItems(listID))
 }
 
-// PrepareAllItemWebhooks captures all item payloads before clearing the database.
-func PrepareAllItemWebhooks(event string) []PreparedItemWebhook {
+// PrepareAllItemWebhooks captures the item payloads of one workspace before clearing it.
+func PrepareAllItemWebhooks(workspaceID int64, event string) []PreparedItemWebhook {
 	if !webhook.Accepts(event) {
 		return nil
 	}
 
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(workspaceID)
 	if err != nil {
 		log.Printf("Could not snapshot database for webhook events: %v", err)
 		return nil

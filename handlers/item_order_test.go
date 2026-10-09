@@ -25,7 +25,7 @@ func TestCompletionOrderMatchesClientFixtures(t *testing.T) {
 	if err := json.Unmarshal(data, &fixtures); err != nil {
 		t.Fatal(err)
 	}
-	list, err := db.CreateList("Ordering", "cart")
+	list, err := db.CreateList(db.DefaultWorkspaceID, "Ordering", "cart")
 	if err != nil {
 		t.Fatal(err)
 	}

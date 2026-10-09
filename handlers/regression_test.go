@@ -49,6 +49,10 @@ func (writer *concurrentWriteDetector) SetWriteDeadline(time.Time) error {
 	return nil
 }
 
+func (writer *concurrentWriteDetector) SetReadDeadline(time.Time) error {
+	return nil
+}
+
 func (writer *concurrentWriteDetector) Close() error {
 	return nil
 }
@@ -95,7 +99,7 @@ func postImportFileWithResolution(t *testing.T, app *fiber.App, filename, conten
 func TestBulkItemMutationsReturnOnlyExactChangedRows(t *testing.T) {
 	initTestDatabase(t)
 
-	list, err := db.CreateList("Weekly", "cart")
+	list, err := db.CreateList(db.DefaultWorkspaceID, "Weekly", "cart")
 	if err != nil {
 		t.Fatalf("create list: %v", err)
 	}
@@ -155,7 +159,7 @@ func TestBulkItemMutationsReturnOnlyExactChangedRows(t *testing.T) {
 	if _, err := db.DB.Exec("UPDATE items SET completed = TRUE WHERE id = ?", first.ID); err != nil {
 		t.Fatalf("prepare completed item for deletion: %v", err)
 	}
-	deleted, err := db.DeleteCompletedItems()
+	deleted, err := db.DeleteCompletedItems(db.DefaultWorkspaceID)
 	if err != nil {
 		t.Fatalf("delete completed items: %v", err)
 	}
@@ -200,7 +204,7 @@ func TestImportDataDoesNotDeadlockSingleConnectionPool(t *testing.T) {
 		t.Fatalf("CSV import status = %d, body = %s", resp.StatusCode, body)
 	}
 
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(db.DefaultWorkspaceID)
 	if err != nil {
 		t.Fatalf("read lists after import: %v", err)
 	}
@@ -208,7 +212,7 @@ func TestImportDataDoesNotDeadlockSingleConnectionPool(t *testing.T) {
 		t.Fatalf("imported lists = %d, want 2", len(lists))
 	}
 
-	templates, err := db.GetAllTemplates()
+	templates, err := db.GetAllTemplates(db.DefaultWorkspaceID)
 	if err != nil {
 		t.Fatalf("read templates after import: %v", err)
 	}
@@ -294,6 +298,7 @@ func TestItemUIHandlersEnforceLengthLimits(t *testing.T) {
 func TestConcurrentWebSocketBroadcastsUseSingleWriter(t *testing.T) {
 	detector := &concurrentWriteDetector{}
 	client := newWebSocketClient(detector)
+	client.workspaceID = db.DefaultWorkspaceID
 	t.Cleanup(func() {
 		_ = client.close()
 		<-client.stopped
@@ -316,7 +321,7 @@ func TestConcurrentWebSocketBroadcastsUseSingleWriter(t *testing.T) {
 		waitGroup.Add(2)
 		go func(index int) {
 			defer waitGroup.Done()
-			BroadcastUpdate("test", map[string]int{"index": index})
+			broadcast(db.DefaultWorkspaceID, "test", map[string]int{"index": index})
 		}(i)
 		go func() {
 			defer waitGroup.Done()

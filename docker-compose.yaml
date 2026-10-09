@@ -6,6 +6,10 @@ services:
     environment:
       - APP_ENV=production
       - APP_PASSWORD=${APP_PASSWORD:-shopping123}
+      - API_TOKEN=${API_TOKEN:-}
+      - MULTI_USER=${MULTI_USER:-}
+      - ADMIN_USER=${ADMIN_USER:-}
+      - API_WORKSPACE_ID=${API_WORKSPACE_ID:-}
       - PORT=8080
       - DB_PATH=/data/shopping.db
       - WEBHOOK_URL=${WEBHOOK_URL:-}

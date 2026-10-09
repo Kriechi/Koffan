@@ -9,3 +9,40 @@
     button, input, optgroup, select, textarea { letter-spacing: inherit; }
     [hidden]:where(:not([hidden=until-found])) { display: none; }
 }
+
+@layer components {
+    /* Pink checkbox with a white tick. The browser's own accent-coloured
+       checkbox picks a dark tick on pink, so draw it ourselves. */
+    .check-pink {
+        appearance: none;
+        -webkit-appearance: none;
+        flex-shrink: 0;
+        width: 1.125rem;
+        height: 1.125rem;
+        border: 1px solid theme('colors.stone.300');
+        border-radius: 0.3rem;
+        background-color: theme('colors.white');
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: 0.8rem;
+        cursor: pointer;
+        transition: background-color 0.15s, border-color 0.15s;
+    }
+    .check-pink:checked {
+        border-color: theme('colors.pink.400');
+        background-color: theme('colors.pink.400');
+        background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3e%3cpath d='M3.5 8.5l3 3 6-7' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3e%3c/svg%3e");
+    }
+    .check-pink:focus-visible {
+        outline: 2px solid theme('colors.pink.400');
+        outline-offset: 2px;
+    }
+    .dark .check-pink {
+        border-color: theme('colors.stone.500');
+        background-color: theme('colors.stone.700');
+    }
+    .dark .check-pink:checked {
+        border-color: theme('colors.pink.400');
+        background-color: theme('colors.pink.400');
+    }
+}

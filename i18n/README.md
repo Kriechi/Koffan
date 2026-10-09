@@ -61,7 +61,7 @@ The new language will automatically appear in the Settings language selector.
 
 When adding or changing user-facing copy, update every supported language in the same change. This includes the offline modal and synchronization error and confirmation messages. English is the reference catalog; the English fallback handles missing keys at runtime but is not a substitute for a translation.
 
-Keep key names and `{{parameter}}` placeholders unchanged. Check that each affected key has a nonempty translated value in every catalog, that each file remains valid JSON, and that the rebuilt app serves the updated text. Rebuild and restart after translation changes because the catalogs are embedded in the binary.
+Keep key names and `{{parameter}}` placeholders unchanged. Run `go test ./i18n/` to check that every catalog has the same keys and placeholders as `en.json` and no empty values, then check that the rebuilt app serves the updated text. Rebuild and restart after translation changes because the catalogs are embedded in the binary.
 
 ## Translation File Structure
 

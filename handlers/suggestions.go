@@ -22,7 +22,7 @@ func GetSuggestions(c *fiber.Ctx) error {
 
 	// If no query, return all suggestions (for offline cache)
 	if query == "" {
-		suggestions, err := db.GetAllItemSuggestions(limit)
+		suggestions, err := db.GetAllItemSuggestions(WorkspaceID(c), limit)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch suggestions"})
 		}
@@ -32,7 +32,7 @@ func GetSuggestions(c *fiber.Ctx) error {
 		return c.JSON(suggestions)
 	}
 
-	suggestions, err := db.GetItemSuggestions(query, limit)
+	suggestions, err := db.GetItemSuggestions(WorkspaceID(c), query, limit)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch suggestions"})
 	}
@@ -46,7 +46,7 @@ func GetSuggestions(c *fiber.Ctx) error {
 
 // GetHistory returns all history items for management UI
 func GetHistory(c *fiber.Ctx) error {
-	items, err := db.GetItemHistoryList()
+	items, err := db.GetItemHistoryList(WorkspaceID(c))
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch history"})
 	}
@@ -65,7 +65,7 @@ func DeleteHistoryItem(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid ID"})
 	}
 
-	err = db.DeleteItemHistory(id)
+	err = db.DeleteItemHistory(WorkspaceID(c), id)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete history item"})
 	}
@@ -98,7 +98,7 @@ func BatchDeleteHistory(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "No valid IDs provided"})
 	}
 
-	deleted, err := db.DeleteItemHistoryBatch(ids)
+	deleted, err := db.DeleteItemHistoryBatch(WorkspaceID(c), ids)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete history items"})
 	}

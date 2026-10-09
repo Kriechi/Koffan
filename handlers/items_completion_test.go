@@ -24,7 +24,7 @@ func (completionTestViews) Render(out io.Writer, _ string, binding interface{}, 
 
 func TestItemCompletionRetriesPreserveDesiredState(t *testing.T) {
 	initTestDatabase(t)
-	list, err := db.CreateList("Shopping", "cart")
+	list, err := db.CreateList(db.DefaultWorkspaceID, "Shopping", "cart")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestItemCompletionRetriesPreserveDesiredState(t *testing.T) {
 
 func TestSetItemCompletedNoOpDoesNotChangeVersion(t *testing.T) {
 	initTestDatabase(t)
-	list, err := db.CreateList("Shopping", "cart")
+	list, err := db.CreateList(db.DefaultWorkspaceID, "Shopping", "cart")
 	if err != nil {
 		t.Fatal(err)
 	}

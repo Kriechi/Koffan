@@ -2,6 +2,7 @@ package api
 
 import (
 	"shopping-list/db"
+	"shopping-list/handlers"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -24,7 +25,7 @@ type BatchDeleteHistoryRequest struct {
 
 // GetHistory returns all history items
 func GetHistory(c *fiber.Ctx) error {
-	items, err := db.GetItemHistoryList()
+	items, err := db.GetItemHistoryList(handlers.WorkspaceID(c))
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "db_error",
@@ -65,7 +66,7 @@ func CreateHistory(c *fiber.Ctx) error {
 
 	// If section_id provided, verify it exists
 	if req.SectionID != 0 {
-		_, err := db.GetSectionByID(req.SectionID)
+		_, err := ownedSection(c, req.SectionID)
 		if err != nil {
 			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
 				Error:   "not_found",
@@ -74,7 +75,7 @@ func CreateHistory(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := db.SaveItemHistory(req.Name, req.SectionID); err != nil {
+	if err := db.SaveItemHistory(handlers.WorkspaceID(c), req.Name, req.SectionID); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "create_failed",
 			Message: "Failed to save history",
@@ -97,7 +98,7 @@ func DeleteHistory(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := db.DeleteItemHistory(int64(id)); err != nil {
+	if err := db.DeleteItemHistory(handlers.WorkspaceID(c), int64(id)); err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
 			Error:   "not_found",
 			Message: "History entry not found",
@@ -124,7 +125,7 @@ func BatchDeleteHistory(c *fiber.Ctx) error {
 		})
 	}
 
-	deleted, err := db.DeleteItemHistoryBatch(req.IDs)
+	deleted, err := db.DeleteItemHistoryBatch(handlers.WorkspaceID(c), req.IDs)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "delete_failed",

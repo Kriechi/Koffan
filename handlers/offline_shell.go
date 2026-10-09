@@ -9,7 +9,7 @@ import (
 // GetOfflineListShell provides the cached UI for newly created offline lists.
 // The local model selects the actual list from the URL, never from this shell.
 func GetOfflineListShell(c *fiber.Ctx) error {
-	snapshot, err := loadOfflineSnapshot()
+	snapshot, err := loadOfflineSnapshot(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}

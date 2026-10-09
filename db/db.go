@@ -207,6 +207,9 @@ func runMigrations() {
 
 	// Migration: Add show_completed to lists
 	migrateListShowCompleted()
+
+	// Migration: users, workspaces and per-workspace data
+	migrateWorkspaces()
 }
 
 func migrateToMultipleLists() {

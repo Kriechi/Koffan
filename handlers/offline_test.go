@@ -19,7 +19,7 @@ import (
 func newOfflineTestApp(t *testing.T) *fiber.App {
 	t.Helper()
 	initTestDatabase(t)
-	if err := db.ClearAllData(); err != nil {
+	if err := db.ClearWorkspaceData(db.DefaultWorkspaceID); err != nil {
 		t.Fatal(err)
 	}
 	app := fiber.New()
@@ -102,7 +102,7 @@ func TestOfflineSyncHTTPRejectsMalformedEnvelopes(t *testing.T) {
 func TestOfflineSnapshotHTTPIncludesEveryListRegardlessOfActiveList(t *testing.T) {
 	app := newOfflineTestApp(t)
 	for _, name := range []string{"First phone", "Second phone"} {
-		list, err := db.CreateList(name, "cart")
+		list, err := db.CreateList(db.DefaultWorkspaceID, name, "cart")
 		if err != nil {
 			t.Fatal(err)
 		}

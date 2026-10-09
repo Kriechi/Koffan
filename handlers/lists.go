@@ -23,13 +23,13 @@ const (
 
 // GetListsPage returns the homepage with all lists
 func GetListsPage(c *fiber.Ctx) error {
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}
 
-	templates, _ := db.GetAllTemplates()
-	snapshot, err := loadOfflineSnapshot()
+	templates, _ := db.GetAllTemplates(WorkspaceID(c))
+	snapshot, err := loadOfflineSnapshot(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}
@@ -62,7 +62,7 @@ func GetListView(c *fiber.Ctx) error {
 	// Set this list as active
 	db.SetActiveList(id)
 
-	snapshot, err := loadOfflineSnapshot()
+	snapshot, err := loadOfflineSnapshot(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}
@@ -81,7 +81,7 @@ func GetListView(c *fiber.Ctx) error {
 
 // GetLists returns all lists (JSON API)
 func GetLists(c *fiber.Ctx) error {
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}
@@ -109,7 +109,7 @@ func CreateList(c *fiber.Ctx) error {
 	}
 
 	// Check for duplicate name
-	exists, err := db.ListNameExists(name, 0)
+	exists, err := db.ListNameExists(WorkspaceID(c), name, 0)
 	if err != nil {
 		return sendError(c, 500, "error.check_failed")
 	}
@@ -125,13 +125,13 @@ func CreateList(c *fiber.Ctx) error {
 		return sendError(c, 400, "error.icon_too_long")
 	}
 
-	list, err := db.CreateList(name, icon)
+	list, err := db.CreateList(WorkspaceID(c), name, icon)
 	if err != nil {
 		return sendError(c, 500, "error.create_failed")
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("list_created", list)
+	BroadcastUpdate(c, "list_created", list)
 
 	// Return the new list item partial for HTMX
 	return c.Render("partials/list_item", fiber.Map{
@@ -158,7 +158,7 @@ func UpdateList(c *fiber.Ctx) error {
 	}
 
 	// Check for duplicate name (excluding current list)
-	exists, err := db.ListNameExists(name, id)
+	exists, err := db.ListNameExists(WorkspaceID(c), name, id)
 	if err != nil {
 		return sendError(c, 500, "error.check_failed")
 	}
@@ -177,7 +177,7 @@ func UpdateList(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("list_updated", list)
+	BroadcastUpdate(c, "list_updated", list)
 
 	// Return updated list item partial
 	return c.Render("partials/list_item", fiber.Map{
@@ -199,7 +199,7 @@ func DeleteList(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("list_deleted", map[string]int64{"id": id})
+	BroadcastUpdate(c, "list_deleted", map[string]int64{"id": id})
 	NotifyPreparedItemWebhooks(webhook.EventItemDeleted, preparedWebhooks)
 
 	// Return empty string (HTMX will remove the element)
@@ -219,7 +219,7 @@ func SetActiveList(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("list_activated", map[string]int64{"id": id})
+	BroadcastUpdate(c, "list_activated", map[string]int64{"id": id})
 
 	// Check if this is an AJAX request (HTMX or fetch)
 	isAjax := c.Get("HX-Request") != "" || c.Get("X-Requested-With") != ""
@@ -253,7 +253,7 @@ func MoveListUp(c *fiber.Ctx) error {
 		return sendError(c, 500, "error.move_failed")
 	}
 
-	BroadcastUpdate("lists_reordered", nil)
+	BroadcastUpdate(c, "lists_reordered", nil)
 	return c.SendStatus(200)
 }
 
@@ -269,18 +269,18 @@ func MoveListDown(c *fiber.Ctx) error {
 		return sendError(c, 500, "error.move_failed")
 	}
 
-	BroadcastUpdate("lists_reordered", nil)
+	BroadcastUpdate(c, "lists_reordered", nil)
 	return c.SendStatus(200)
 }
 
 // Helper to return all lists as HTML partials
 func returnAllLists(c *fiber.Ctx) error {
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}
 
-	activeList, _ := db.GetActiveList()
+	activeList, _ := db.GetActiveList(WorkspaceID(c))
 
 	return c.Render("partials/lists_container", fiber.Map{
 		"Lists":      lists,
@@ -301,7 +301,7 @@ func ToggleShowCompleted(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("list_updated", list)
+	BroadcastUpdate(c, "list_updated", list)
 
 	// Return the updated sections list
 	sections, err := db.GetSectionsByList(id)
@@ -316,10 +316,10 @@ func ToggleShowCompleted(c *fiber.Ctx) error {
 }
 
 // sectionRenderMap builds the template data map for rendering a single section partial
-func sectionRenderMap(section *db.Section) fiber.Map {
+func sectionRenderMap(c *fiber.Ctx, section *db.Section) fiber.Map {
 	return fiber.Map{
 		"Section":       section,
-		"Sections":      getSectionsForDropdown(),
+		"Sections":      getSectionsForDropdown(c),
 		"ShowCompleted": db.GetShowCompletedForSection(section.ID),
 	}
 }

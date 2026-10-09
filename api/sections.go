@@ -79,7 +79,7 @@ func CreateSection(c *fiber.Ctx) error {
 	}
 
 	// Check if list exists
-	_, err := db.GetListByID(req.ListID)
+	_, err := ownedList(c, req.ListID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
@@ -101,7 +101,7 @@ func CreateSection(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("section_created", section)
+	handlers.BroadcastUpdate(c, "section_created", section)
 	return c.Status(fiber.StatusCreated).JSON(section)
 }
 
@@ -167,7 +167,7 @@ func UpdateSection(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("section_updated", section)
+	handlers.BroadcastUpdate(c, "section_updated", section)
 	return c.JSON(section)
 }
 
@@ -204,7 +204,7 @@ func DeleteSection(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("section_deleted", map[string]int64{"id": int64(id)})
+	handlers.BroadcastUpdate(c, "section_deleted", map[string]int64{"id": int64(id)})
 	handlers.NotifyPreparedItemWebhooks(webhook.EventItemDeleted, preparedWebhooks)
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -277,7 +277,7 @@ func MoveSectionUp(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("sections_reordered", nil)
+	handlers.BroadcastUpdate(c, "sections_reordered", nil)
 
 	section, _ := db.GetSectionByID(int64(id))
 	return c.JSON(section)
@@ -324,7 +324,7 @@ func UpdateSectionSortMode(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("section_sort_changed", map[string]interface{}{"section_id": int64(id), "sort_mode": req.SortMode})
+	handlers.BroadcastUpdate(c, "section_sort_changed", map[string]interface{}{"section_id": int64(id), "sort_mode": req.SortMode})
 	return c.JSON(section)
 }
 
@@ -361,7 +361,7 @@ func CheckAllItems(c *fiber.Ctx) error {
 	}
 	count := len(items)
 
-	handlers.BroadcastUpdate("section_items_checked", map[string]interface{}{"section_id": int64(id), "count": count})
+	handlers.BroadcastUpdate(c, "section_items_checked", map[string]interface{}{"section_id": int64(id), "count": count})
 	handlers.NotifyItemWebhooks(webhook.EventItemCompleted, items)
 	return c.JSON(fiber.Map{"count": count, "section_id": id})
 }
@@ -399,7 +399,7 @@ func UncheckAllItems(c *fiber.Ctx) error {
 	}
 	count := len(items)
 
-	handlers.BroadcastUpdate("section_items_unchecked", map[string]interface{}{"section_id": int64(id), "count": count})
+	handlers.BroadcastUpdate(c, "section_items_unchecked", map[string]interface{}{"section_id": int64(id), "count": count})
 	handlers.NotifyItemWebhooks(webhook.EventItemUpdated, items)
 	return c.JSON(fiber.Map{"count": count, "section_id": id})
 }
@@ -436,7 +436,7 @@ func MoveSectionDown(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("sections_reordered", nil)
+	handlers.BroadcastUpdate(c, "sections_reordered", nil)
 
 	section, _ := db.GetSectionByID(int64(id))
 	return c.JSON(section)

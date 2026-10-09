@@ -15,6 +15,37 @@
                     <img src="/static/koffan-logo.webp" alt="Koffan Logo" class="app-logo-home">
                 </a>
 
+                {{if .MultiUser}}{{if .Workspace}}
+                <!-- Workspace switcher -->
+                <div x-data="{ open: false }" class="relative ml-auto mr-2">
+                    <button @click="open = !open" :aria-expanded="open" aria-haspopup="true"
+                        class="flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-full bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 text-sm text-stone-700 dark:text-stone-200 hover:border-pink-300 dark:hover:border-pink-700 transition-colors">
+                        <span class="w-6 h-6 rounded-full bg-pink-100 dark:bg-pink-900/40 flex items-center justify-center text-sm leading-none">
+                            <span style="filter: grayscale(100%) sepia(50%) hue-rotate(-30deg) saturate(300%);">{{.Workspace.Icon}}</span>
+                        </span>
+                        <span class="max-w-[9rem] truncate">{{.Workspace.Name}}</span>
+                        <svg class="w-4 h-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+                    <div x-show="open" x-cloak @click.outside="open = false" @keydown.escape.window="open = false"
+                        class="absolute right-0 mt-2 w-64 bg-white dark:bg-stone-800 rounded-xl shadow-xl border border-stone-200 dark:border-stone-700 z-50 py-2">
+                        <p class="px-4 pt-1 pb-2 text-xs text-stone-400 dark:text-stone-500 truncate">{{.User.DisplayName}}</p>
+                        {{$currentWorkspace := .Workspace.ID}}
+                        {{range .Workspaces}}
+                        <form action="/workspaces/{{.ID}}/switch" method="POST">
+                            <button type="submit" class="w-full flex items-center justify-between gap-2 px-4 py-2 text-sm text-left text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700">
+                                <span class="flex items-center gap-2.5 min-w-0">
+                                    <span class="w-5 text-center flex-shrink-0" style="filter: grayscale(100%) sepia(50%) hue-rotate(-30deg) saturate(300%);">{{.Icon}}</span>
+                                    <span class="truncate">{{.Name}}</span>
+                                </span>
+                                {{if eq .ID $currentWorkspace}}<svg class="w-4 h-4 text-pink-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>{{end}}
+                            </button>
+                        </form>
+                        {{end}}
+                        <a href="/workspaces" class="block px-4 py-2 mt-1 text-sm text-pink-500 hover:bg-stone-50 dark:hover:bg-stone-700 border-t border-stone-100 dark:border-stone-700" x-text="t('workspaces.manage')"></a>
+                    </div>
+                </div>
+                {{end}}{{end}}
+
                 <!-- Settings -->
                 <button
                     @click="showSettings = true"
@@ -490,6 +521,7 @@
                 </div>
 
                 <!-- Danger Zone -->
+                {{if or (not .MultiUser) .CanManageWorkspace}}
                 <div class="border-t border-stone-100 dark:border-stone-700 pt-6 mt-6">
                     <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
                         <h4 class="text-sm font-medium text-red-700 dark:text-red-400 mb-2 flex items-center gap-2">
@@ -499,6 +531,7 @@
                             <span x-text="t('danger_zone.title')"></span>
                         </h4>
                         <p class="text-xs text-red-600 dark:text-red-400 mb-3" x-text="t('danger_zone.clear_database_warning')"></p>
+                        {{if .MultiUser}}<p class="text-xs font-medium text-red-600 dark:text-red-400 mb-3" x-text="t('danger_zone.workspace_only')"></p>{{end}}
                         <button
                             @click="showClearDatabaseModal = true"
                             :disabled="!isOnline"
@@ -512,6 +545,7 @@
                         </button>
                     </div>
                 </div>
+                {{end}}
             </div>
         </div>
     </div>

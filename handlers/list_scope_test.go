@@ -13,11 +13,11 @@ import (
 
 func TestListSnapshotsAndStatsRemainScopedWhenAnotherTabChangesActiveList(t *testing.T) {
 	initTestDatabase(t)
-	requested, err := db.CreateList("Open on phone", "cart")
+	requested, err := db.CreateList(db.DefaultWorkspaceID, "Open on phone", "cart")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := db.CreateList("Open on another phone", "cart")
+	other, err := db.CreateList(db.DefaultWorkspaceID, "Open on another phone", "cart")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestListSnapshotsAndStatsRemainScopedWhenAnotherTabChangesActiveList(t *tes
 			})
 		}
 	}
-	active, err := db.GetActiveList()
+	active, err := db.GetActiveList(db.DefaultWorkspaceID)
 	if err != nil || active.ID != other.ID {
 		t.Fatalf("scoped reads changed active list: %#v, %v", active, err)
 	}

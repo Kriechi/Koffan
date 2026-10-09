@@ -68,7 +68,7 @@ func TestPreparedItemWebhookKeepsContextAfterSectionDeletion(t *testing.T) {
 
 	configureTestWebhook(t, server.URL, webhook.EventItemDeleted)
 
-	list, err := db.CreateList("Weekly groceries", "cart")
+	list, err := db.CreateList(db.DefaultWorkspaceID, "Weekly groceries", "cart")
 	if err != nil {
 		t.Fatalf("create list: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestImportReplaceEmitsDeletedAndCreatedItemWebhooks(t *testing.T) {
 			t.Cleanup(server.Close)
 			configureTestWebhook(t, server.URL, webhook.EventItemDeleted+","+webhook.EventItemCreated)
 
-			list, err := db.CreateList("Weekly", "cart")
+			list, err := db.CreateList(db.DefaultWorkspaceID, "Weekly", "cart")
 			if err != nil {
 				t.Fatalf("create existing list: %v", err)
 			}
@@ -204,7 +204,7 @@ func TestClearDatabaseEmitsDeletedItemWebhooks(t *testing.T) {
 	t.Cleanup(server.Close)
 	configureTestWebhook(t, server.URL, webhook.EventItemDeleted)
 
-	list, err := db.CreateList("Weekly", "cart")
+	list, err := db.CreateList(db.DefaultWorkspaceID, "Weekly", "cart")
 	if err != nil {
 		t.Fatalf("create list: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestDisabledWebhookPreparationDoesNotReadDatabase(t *testing.T) {
 	if prepared := PrepareListItemWebhooks(webhook.EventItemDeleted, 1); prepared != nil {
 		t.Fatalf("list preparation = %#v, want nil", prepared)
 	}
-	if prepared := PrepareAllItemWebhooks(webhook.EventItemDeleted); prepared != nil {
+	if prepared := PrepareAllItemWebhooks(db.DefaultWorkspaceID, webhook.EventItemDeleted); prepared != nil {
 		t.Fatalf("database preparation = %#v, want nil", prepared)
 	}
 	NotifyCreatedListItems(1, nil)

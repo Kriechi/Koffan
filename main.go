@@ -15,6 +15,7 @@ import (
 	"shopping-list/i18n"
 	"shopping-list/webhook"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -23,7 +24,6 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/template/html/v2"
-	"github.com/gofiber/websocket/v2"
 )
 
 //go:embed templates/*
@@ -57,6 +57,50 @@ func main() {
 			log.Printf("Webhook worker shutdown timed out: %v", err)
 		}
 	}()
+
+	// Say what the accounts setting resolved to: MULTI_USER only counts as exactly "true".
+	switch v := os.Getenv("MULTI_USER"); {
+	case v == "true" && os.Getenv("DISABLE_AUTH") == "true":
+		log.Println("MULTI_USER=true is ignored because DISABLE_AUTH=true")
+	case v == "true":
+		log.Println("Accounts and workspaces are enabled")
+	case v != "" && v != "false":
+		log.Printf("MULTI_USER=%q is ignored: use exactly \"true\" to enable accounts", v)
+	}
+
+	// With accounts enabled, make sure someone can sign in.
+	if handlers.MultiUser() {
+		admin := strings.TrimSpace(os.Getenv("ADMIN_USER"))
+		if admin == "" {
+			admin = "admin"
+		}
+		if db.CountUsers() == 0 {
+			if len(admin) > handlers.MaxUsernameLength || !handlers.ValidUsername(admin) {
+				log.Fatalf("ADMIN_USER=%q is not a valid username: use up to %d characters without spaces or commas", admin, handlers.MaxUsernameLength)
+			}
+			password := os.Getenv("APP_PASSWORD")
+			if len(password) < handlers.MinPasswordLength {
+				log.Fatalf("MULTI_USER=true needs APP_PASSWORD (at least %d characters) to create the first administrator", handlers.MinPasswordLength)
+			}
+			if password == handlers.DefaultPassword {
+				log.Fatal("APP_PASSWORD is the built-in default password: choose your own before enabling accounts")
+			}
+			if err := db.EnsureBootstrapAdmin(admin, password); err != nil {
+				log.Fatalf("Could not create the first administrator: %v", err)
+			}
+			log.Printf("Created administrator %q with the password from APP_PASSWORD", admin)
+		}
+	}
+
+	if v := os.Getenv("API_WORKSPACE_ID"); v != "" {
+		if !handlers.MultiUser() {
+			log.Println("API_WORKSPACE_ID is ignored unless MULTI_USER=true")
+		} else if id, err := strconv.ParseInt(v, 10, 64); err != nil || id < 1 {
+			log.Fatalf("API_WORKSPACE_ID=%q is not a workspace id", v)
+		} else if _, err := db.GetWorkspace(id); err != nil {
+			log.Printf("API_WORKSPACE_ID=%d: that workspace does not exist; the REST API answers 503 until it does", id)
+		}
+	}
 
 	// Clean expired sessions on startup
 	db.CleanExpiredSessions()
@@ -127,6 +171,13 @@ func main() {
 		},
 		"asset": func(path string) string {
 			return "/static/" + path + "?v=" + handlers.AssetHash
+		},
+		// initial is the first letter of a name, for avatar tiles.
+		"initial": func(name string) string {
+			for _, r := range strings.TrimSpace(name) {
+				return strings.ToUpper(string(r))
+			}
+			return "?"
 		},
 	})
 
@@ -219,101 +270,7 @@ func main() {
 	// Auth middleware for all other routes
 	app.Use(handlers.AuthMiddleware)
 
-	// WebSocket upgrade middleware
-	app.Use("/ws", func(c *fiber.Ctx) error {
-		if websocket.IsWebSocketUpgrade(c) {
-			c.Locals("allowed", true)
-			return c.Next()
-		}
-		return fiber.ErrUpgradeRequired
-	})
-
-	// WebSocket endpoint
-	app.Get("/ws", websocket.New(handlers.WebSocketHandler))
-
-	// Main page - shows all lists
-	app.Get("/", handlers.GetListsPage)
-	app.Get("/offline/list", handlers.GetOfflineListShell)
-	app.Get("/api/offline/snapshot", handlers.GetOfflineSnapshot)
-	app.Post("/api/offline/sync", handlers.SyncOffline)
-
-	// Single list view - shows items
-	app.Get("/lists/:id", handlers.GetListView)
-
-	// Sections API
-	app.Get("/sections/list", handlers.GetSectionsListForModal)
-	app.Get("/sections/:id/html", handlers.GetSectionHTML)
-	app.Post("/sections", handlers.CreateSection)
-	app.Put("/sections/:id", handlers.UpdateSection)
-	app.Delete("/sections/:id", handlers.DeleteSection)
-	app.Post("/sections/:id/move-up", handlers.MoveSectionUp)
-	app.Post("/sections/:id/move-down", handlers.MoveSectionDown)
-	app.Post("/sections/:id/check-all", handlers.CheckAllItems)
-	app.Post("/sections/:id/uncheck-all", handlers.UncheckAllItems)
-	app.Post("/sections/:id/sort-mode", handlers.UpdateSectionSortMode)
-
-	// Lists API
-	app.Get("/lists", handlers.GetLists)
-	app.Post("/lists", handlers.CreateList)
-	app.Put("/lists/:id", handlers.UpdateList)
-	app.Delete("/lists/:id", handlers.DeleteList)
-	app.Post("/lists/:id/activate", handlers.SetActiveList)
-	app.Get("/lists/:id/activate", handlers.SetActiveList)
-	app.Post("/lists/:id/move-up", handlers.MoveListUp)
-	app.Post("/lists/:id/move-down", handlers.MoveListDown)
-	app.Post("/lists/:id/toggle-completed", handlers.ToggleShowCompleted)
-
-	// Templates API
-	app.Get("/templates", handlers.GetTemplates)
-	app.Get("/templates/:id", handlers.GetTemplate)
-	app.Post("/templates", handlers.CreateTemplate)
-	app.Put("/templates/:id", handlers.UpdateTemplate)
-	app.Delete("/templates/:id", handlers.DeleteTemplate)
-	app.Post("/templates/:id/items", handlers.AddTemplateItem)
-	app.Put("/templates/:id/items/:itemId", handlers.UpdateTemplateItem)
-	app.Delete("/templates/:id/items/:itemId", handlers.DeleteTemplateItem)
-	app.Post("/templates/:id/apply", handlers.ApplyTemplate)
-	app.Post("/templates/from-list", handlers.CreateTemplateFromList)
-
-	// Items API
-	app.Get("/items/:id/html", handlers.GetItemHTML)
-	app.Post("/items", handlers.CreateItem)
-	app.Post("/items/delete-completed", handlers.DeleteCompletedItems)
-	app.Put("/items/:id", handlers.UpdateItem)
-	app.Delete("/items/:id", handlers.DeleteItem)
-	app.Post("/items/:id/toggle", handlers.ToggleItem)
-	app.Post("/items/:id/quantity", handlers.AdjustItemQuantity)
-	app.Post("/items/:id/uncertain", handlers.ToggleUncertain)
-	app.Post("/items/:id/move", handlers.MoveItemToSection)
-	app.Post("/items/:id/move-up", handlers.MoveItemUp)
-	app.Post("/items/:id/move-down", handlers.MoveItemDown)
-
-	// Stats API
-	app.Get("/stats", handlers.GetStats)
-
-	// Offline data API
-	app.Get("/api/data", handlers.GetAllData)
-	app.Get("/api/item/:id/version", handlers.GetItemVersion)
-	app.Get("/api/suggestions", handlers.GetSuggestions)
-
-	// History management API
-	app.Get("/api/history", handlers.GetHistory)
-	app.Delete("/api/history/:id", handlers.DeleteHistoryItem)
-	app.Post("/api/history/batch-delete", handlers.BatchDeleteHistory)
-
-	// Batch operations
-	app.Post("/sections/batch-delete", handlers.BatchDeleteSections)
-
-	// Import/Export
-	app.Get("/export", handlers.ExportAllData)
-	app.Get("/export/list/:id", handlers.ExportSingleList)
-	app.Get("/export/preview", handlers.GetExportPreview)
-	app.Post("/import", handlers.ImportData)
-	app.Post("/import/preview", handlers.PreviewImport)
-
-	// Database management
-	app.Get("/api/database/csrf-token", handlers.GenerateCSRFToken)
-	app.Post("/api/database/clear", handlers.ClearDatabase)
+	handlers.RegisterRoutes(app)
 
 	// Get port from env or default to 3000
 	port := os.Getenv("PORT")

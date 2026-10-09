@@ -13,6 +13,10 @@ import (
 
 var ErrInvalidListID = errors.New("invalid list_id")
 
+// ErrListNotFound covers lists that do not exist and lists of another
+// workspace: the two are indistinguishable to the caller.
+var ErrListNotFound = errors.New("list not found")
+
 // GetSectionHTML returns a single section rendered as HTML partial
 func GetSectionHTML(c *fiber.Ctx) error {
 	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
@@ -25,21 +29,21 @@ func GetSectionHTML(c *fiber.Ctx) error {
 		return sendError(c, 404, "error.section_not_found")
 	}
 
-	return c.Render("partials/section", sectionRenderMap(section), "")
+	return c.Render("partials/section", sectionRenderMap(c, section), "")
 }
 
 // GetSections returns all sections with items (for full page render)
 func GetSections(c *fiber.Ctx) error {
-	sections, err := db.GetAllSections()
+	sections, err := db.GetAllSections(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}
 
-	stats := db.GetStats()
+	stats := db.GetStats(WorkspaceID(c))
 
 	// Get lists for dropdown
-	lists, _ := db.GetAllLists()
-	activeList, _ := db.GetActiveList()
+	lists, _ := db.GetAllLists(WorkspaceID(c))
+	activeList, _ := db.GetActiveList(WorkspaceID(c))
 
 	return c.Render("list", withPageI18n(c, fiber.Map{
 		"Sections":   sections,
@@ -62,16 +66,16 @@ func CreateSection(c *fiber.Ctx) error {
 		return sendError(c, 400, "common.reserved_name")
 	}
 
-	section, err := db.CreateSection(name)
+	section, err := db.CreateSection(WorkspaceID(c), name)
 	if err != nil {
 		return sendError(c, 500, "error.create_failed")
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("section_created", section)
+	BroadcastUpdate(c, "section_created", section)
 
 	// Return the new section partial for HTMX
-	return c.Render("partials/section", sectionRenderMap(section), "")
+	return c.Render("partials/section", sectionRenderMap(c, section), "")
 }
 
 // UpdateSection updates a section's name
@@ -98,7 +102,7 @@ func UpdateSection(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("section_updated", section)
+	BroadcastUpdate(c, "section_updated", section)
 
 	// Return appropriate partial based on context
 	if c.Get("HX-Target") == "manage-sections-list" {
@@ -106,7 +110,7 @@ func UpdateSection(c *fiber.Ctx) error {
 	}
 
 	// Return updated section partial for main list
-	return c.Render("partials/section", sectionRenderMap(section), "")
+	return c.Render("partials/section", sectionRenderMap(c, section), "")
 }
 
 // DeleteSection deletes a section and all its items
@@ -123,7 +127,7 @@ func DeleteSection(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("section_deleted", map[string]int64{"id": id})
+	BroadcastUpdate(c, "section_deleted", map[string]int64{"id": id})
 	NotifyPreparedItemWebhooks(webhook.EventItemDeleted, preparedWebhooks)
 
 	// Return empty string (HTMX will remove the element)
@@ -142,7 +146,7 @@ func MoveSectionUp(c *fiber.Ctx) error {
 		return sendError(c, 500, "error.move_failed")
 	}
 
-	BroadcastUpdate("sections_reordered", nil)
+	BroadcastUpdate(c, "sections_reordered", nil)
 
 	// Modal expects full list, main page handles reorder via WS
 	if c.Get("HX-Target") == "manage-sections-list" {
@@ -163,7 +167,7 @@ func MoveSectionDown(c *fiber.Ctx) error {
 		return sendError(c, 500, "error.move_failed")
 	}
 
-	BroadcastUpdate("sections_reordered", nil)
+	BroadcastUpdate(c, "sections_reordered", nil)
 
 	if c.Get("HX-Target") == "manage-sections-list" {
 		return returnSectionsForModal(c)
@@ -188,14 +192,14 @@ func UpdateSectionSortMode(c *fiber.Ctx) error {
 		return sendError(c, 500, "error.update_failed")
 	}
 
-	BroadcastUpdate("section_sort_changed", map[string]interface{}{"section_id": id, "sort_mode": sortMode})
+	BroadcastUpdate(c, "section_sort_changed", map[string]interface{}{"section_id": id, "sort_mode": sortMode})
 
-	return c.Render("partials/section", sectionRenderMap(section), "")
+	return c.Render("partials/section", sectionRenderMap(c, section), "")
 }
 
 // Helper to get sections for dropdown
-func getSectionsForDropdown() []db.Section {
-	sections, _ := db.GetAllSections()
+func getSectionsForDropdown(c *fiber.Ctx) []db.Section {
+	sections, _ := db.GetAllSections(WorkspaceID(c))
 	return sections
 }
 
@@ -207,32 +211,40 @@ func BatchDeleteSections(c *fiber.Ctx) error {
 		return sendError(c, 400, "error.no_ids")
 	}
 
-	// Parse IDs
+	// Parse IDs. Sections that are already gone (another device deleted them) or
+	// belong to another workspace are skipped the same way: the rest of the
+	// batch still goes through and nothing tells the two cases apart.
 	var ids []int64
+	parsed := 0
 	for _, idStr := range splitAndTrimCSV(idsStr) {
 		id, err := strconv.ParseInt(idStr, 10, 64)
 		if err != nil {
 			continue
 		}
-		ids = append(ids, id)
+		parsed++
+		if OwnsSection(c, id) {
+			ids = append(ids, id)
+		}
 	}
 
-	if len(ids) == 0 {
+	if parsed == 0 {
 		return sendError(c, 400, "error.no_valid_ids")
 	}
 
-	var preparedWebhooks []PreparedItemWebhook
-	for _, id := range ids {
-		preparedWebhooks = append(preparedWebhooks, PrepareSectionItemWebhooks(webhook.EventItemDeleted, id)...)
-	}
-	err := db.DeleteSections(ids)
-	if err != nil {
-		return sendError(c, 500, "error.delete_failed")
-	}
+	if len(ids) > 0 {
+		var preparedWebhooks []PreparedItemWebhook
+		for _, id := range ids {
+			preparedWebhooks = append(preparedWebhooks, PrepareSectionItemWebhooks(webhook.EventItemDeleted, id)...)
+		}
+		err := db.DeleteSections(ids)
+		if err != nil {
+			return sendError(c, 500, "error.delete_failed")
+		}
 
-	// Broadcast to WebSocket clients
-	BroadcastUpdate("sections_deleted", map[string]interface{}{"ids": ids})
-	NotifyPreparedItemWebhooks(webhook.EventItemDeleted, preparedWebhooks)
+		// Broadcast to WebSocket clients
+		BroadcastUpdate(c, "sections_deleted", map[string]interface{}{"ids": ids})
+		NotifyPreparedItemWebhooks(webhook.EventItemDeleted, preparedWebhooks)
+	}
 
 	// Return updated sections list for modal
 	return returnSectionsForModal(c)
@@ -257,9 +269,12 @@ func getSectionsForList(c *fiber.Ctx) ([]db.Section, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s", ErrInvalidListID, listIDStr)
 		}
+		if !OwnsList(c, listID) {
+			return nil, ErrListNotFound
+		}
 		return db.GetSectionsByList(listID)
 	}
-	return db.GetAllSections()
+	return db.GetAllSections(WorkspaceID(c))
 }
 
 // Helper to return sections for modal
@@ -268,6 +283,9 @@ func returnSectionsForModal(c *fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, ErrInvalidListID) {
 			return sendError(c, 400, "error.invalid_list_id")
+		}
+		if errors.Is(err, ErrListNotFound) {
+			return notFound(c)
 		}
 		return sendError(c, 500, "error.fetch_failed")
 	}
@@ -285,6 +303,9 @@ func GetSectionsListForModal(c *fiber.Ctx) error {
 		if err != nil {
 			if errors.Is(err, ErrInvalidListID) {
 				return c.Status(400).JSON(fiber.Map{"error": "Invalid list_id parameter"})
+			}
+			if errors.Is(err, ErrListNotFound) {
+				return c.Status(404).JSON(fiber.Map{"error": "List not found"})
 			}
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch sections"})
 		}

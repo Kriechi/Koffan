@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"shopping-list/db"
 	"strconv"
 	"time"
@@ -12,6 +13,9 @@ import (
 func GetAllData(c *fiber.Ctx) error {
 	listID, err := requestedListID(c)
 	if err != nil {
+		if errors.Is(err, ErrListNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": "List not found"})
+		}
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid list_id parameter"})
 	}
 	var sections []db.Section
@@ -20,8 +24,8 @@ func GetAllData(c *fiber.Ctx) error {
 		sections, err = db.GetSectionsByList(listID)
 		stats = db.GetListStats(listID)
 	} else {
-		sections, err = db.GetAllSections()
-		stats = db.GetStats()
+		sections, err = db.GetAllSections(WorkspaceID(c))
+		stats = db.GetStats(WorkspaceID(c))
 	}
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch data"})
@@ -43,6 +47,9 @@ func requestedListID(c *fiber.Ctx) (int64, error) {
 	listID, err := strconv.ParseInt(c.Query("list_id"), 10, 64)
 	if err != nil || listID <= 0 {
 		return 0, ErrInvalidListID
+	}
+	if !OwnsList(c, listID) {
+		return 0, ErrListNotFound
 	}
 	return listID, nil
 }

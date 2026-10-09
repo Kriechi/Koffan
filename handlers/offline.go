@@ -17,8 +17,8 @@ import (
 
 // loadOfflineSnapshot reads the snapshot sent to clients, stamped with the
 // time it was generated.
-func loadOfflineSnapshot() (db.OfflineSnapshot, error) {
-	snapshot, err := db.GetOfflineSnapshot()
+func loadOfflineSnapshot(workspaceID int64) (db.OfflineSnapshot, error) {
+	snapshot, err := db.GetOfflineSnapshot(workspaceID)
 	snapshot.GeneratedAt = time.Now().UnixMilli()
 	return snapshot, err
 }
@@ -26,7 +26,7 @@ func loadOfflineSnapshot() (db.OfflineSnapshot, error) {
 // GetOfflineSnapshot returns all lists so an offline device can navigate its
 // cached lists independently of another device's current list.
 func GetOfflineSnapshot(c *fiber.Ctx) error {
-	snapshot, err := loadOfflineSnapshot()
+	snapshot, err := loadOfflineSnapshot(WorkspaceID(c))
 	if err != nil {
 		log.Printf("Offline snapshot failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to load offline snapshot"})
@@ -47,7 +47,7 @@ func SyncOffline(c *fiber.Ctx) error {
 	if err := decoder.Decode(new(interface{})); err != io.EOF {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid offline sync request"})
 	}
-	response, err := db.ApplyOfflineSync(request, enqueueOfflineWebhook)
+	response, err := db.ApplyOfflineSync(WorkspaceID(c), request, enqueueOfflineWebhook)
 	if err != nil {
 		var inputErr *db.OfflineError
 		if errors.As(err, &inputErr) {
@@ -61,7 +61,7 @@ func SyncOffline(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to save offline changes"})
 	}
 	if response.Changed {
-		BroadcastUpdate("offline_sync", nil)
+		BroadcastUpdate(c, "offline_sync", nil)
 	}
 	response.Snapshot.GeneratedAt = time.Now().UnixMilli()
 	c.Set("Cache-Control", "no-store")

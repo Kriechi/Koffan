@@ -30,6 +30,75 @@
         })();
     </script>
 
+    {{if .Workspace}}
+    <!-- Accounts: which user and workspace this page was rendered for -->
+    <meta name="koffan-user" content="{{.User.ID}}">
+    <meta name="koffan-workspace" content="{{.Workspace.ID}}">
+    <script>
+        (function () {
+            var user = document.querySelector('meta[name="koffan-user"]').content;
+            var workspace = document.querySelector('meta[name="koffan-workspace"]').content;
+
+            // The offline copy (IndexedDB, cached pages) belongs to one account
+            // and workspace. When another account or workspace opens the app on
+            // this browser, drop it before anything reads it. The same account
+            // coming back keeps its copy, including changes not yet synced.
+            try {
+                var owner = user + ':' + workspace;
+                var previous = localStorage.getItem('koffan-owner');
+                if (previous !== null && previous !== owner) {
+                    indexedDB.deleteDatabase('koffan-offline');
+                    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                        navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+                    }
+                }
+                localStorage.setItem('koffan-owner', owner);
+            } catch (e) {}
+
+            // Tell the server which workspace this page belongs to. If the
+            // session has moved on (switched in another tab), the server answers
+            // 409 and the stale page reloads instead of writing to the wrong one.
+            var nativeFetch = window.fetch;
+            window.fetch = function (input, init) {
+                try {
+                    var request = new Request(input, init);
+                    if (new URL(request.url).origin === location.origin) {
+                        request.headers.set('X-Koffan-Workspace', workspace);
+                    }
+                    return nativeFetch.call(this, request).then(function (response) {
+                        if (response.status === 409 && response.headers.get('X-Workspace-Mismatch')) location.reload();
+                        return response;
+                    });
+                } catch (e) {
+                    return nativeFetch.call(this, input, init);
+                }
+            };
+            document.addEventListener('htmx:configRequest', function (e) {
+                e.detail.headers['X-Koffan-Workspace'] = workspace;
+            });
+            document.addEventListener('htmx:responseError', function (e) {
+                var xhr = e.detail && e.detail.xhr;
+                if (xhr && xhr.status === 409 && xhr.getResponseHeader('X-Workspace-Mismatch')) location.reload();
+            });
+        })();
+    </script>
+    {{else if .User}}
+    <script>
+        // Accounts, but no workspace to show (the last one was left or taken
+        // away): nothing offline belongs to this page any more, so drop what
+        // an earlier workspace left in this browser.
+        try {
+            if (localStorage.getItem('koffan-owner') !== null) {
+                indexedDB.deleteDatabase('koffan-offline');
+                if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                    navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+                }
+                localStorage.removeItem('koffan-owner');
+            }
+        } catch (e) {}
+    </script>
+    {{end}}
+
     <!-- UI scale initialization (must run before body renders to prevent flash) -->
     <script src="{{asset "ui-scale.js"}}"></script>
     <script>

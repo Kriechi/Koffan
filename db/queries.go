@@ -36,8 +36,10 @@ type Item struct {
 
 // Session represents a user session
 type Session struct {
-	ID        string
-	ExpiresAt int64
+	ID          string
+	ExpiresAt   int64
+	UserID      int64 // 0 for the legacy shared-password session
+	WorkspaceID int64 // 0 until a workspace has been chosen
 }
 
 // List represents a shopping list
@@ -105,12 +107,13 @@ func scanListWithStats(scanner interface {
 	return l, nil
 }
 
-// GetAllLists returns all shopping lists with their stats (single query with GROUP BY).
-func GetAllLists() ([]List, error) {
-	rows, err := DB.Query(listSelectWithStats + `
+// GetAllLists returns the shopping lists of one workspace with their stats (single query with GROUP BY).
+func GetAllLists(workspaceID int64) ([]List, error) {
+	rows, err := DB.Query(listSelectWithStats+`
+		WHERE l.workspace_id = ?
 		GROUP BY l.id
 		ORDER BY l.sort_order ASC
-	`)
+	`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -141,12 +144,12 @@ func GetListByID(id int64) (*List, error) {
 }
 
 // GetActiveList returns the currently active list with stats.
-func GetActiveList() (*List, error) {
-	row := DB.QueryRow(listSelectWithStats + `
-		WHERE l.is_active = TRUE
+func GetActiveList(workspaceID int64) (*List, error) {
+	row := DB.QueryRow(listSelectWithStats+`
+		WHERE l.is_active = TRUE AND l.workspace_id = ?
 		GROUP BY l.id
 		LIMIT 1
-	`)
+	`, workspaceID)
 	l, err := scanListWithStats(row)
 	if err != nil {
 		return nil, err
@@ -155,17 +158,17 @@ func GetActiveList() (*List, error) {
 }
 
 // CreateList creates a new shopping list
-func CreateList(name, icon string) (*List, error) {
+func CreateList(workspaceID int64, name, icon string) (*List, error) {
 	var maxOrder int
-	DB.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM lists").Scan(&maxOrder)
+	DB.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM lists WHERE workspace_id = ?", workspaceID).Scan(&maxOrder)
 
 	if icon == "" {
 		icon = "🛒"
 	}
 
 	result, err := DB.Exec(`
-		INSERT INTO lists (name, icon, sort_order, is_active) VALUES (?, ?, ?, FALSE)
-	`, name, icon, maxOrder+1)
+		INSERT INTO lists (name, icon, sort_order, is_active, workspace_id) VALUES (?, ?, ?, FALSE, ?)
+	`, name, icon, maxOrder+1, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -176,19 +179,19 @@ func CreateList(name, icon string) (*List, error) {
 
 // ListNameExists checks if a list with the given name already exists (case-insensitive)
 // excludeID allows excluding a specific list (useful when updating)
-func ListNameExists(name string, excludeID int64) (bool, error) {
+func ListNameExists(workspaceID int64, name string, excludeID int64) (bool, error) {
 	var count int
 	var err error
 	if excludeID > 0 {
 		err = DB.QueryRow(`
 			SELECT COUNT(*) FROM lists
-			WHERE name = ? COLLATE NOCASE AND id != ?
-		`, name, excludeID).Scan(&count)
+			WHERE workspace_id = ? AND name = ? COLLATE NOCASE AND id != ?
+		`, workspaceID, name, excludeID).Scan(&count)
 	} else {
 		err = DB.QueryRow(`
 			SELECT COUNT(*) FROM lists
-			WHERE name = ? COLLATE NOCASE
-		`, name).Scan(&count)
+			WHERE workspace_id = ? AND name = ? COLLATE NOCASE
+		`, workspaceID, name).Scan(&count)
 	}
 	if err != nil {
 		return false, err
@@ -254,8 +257,8 @@ func SetActiveList(id int64) error {
 	}
 	defer tx.Rollback()
 
-	// Deactivate all lists
-	_, err = tx.Exec("UPDATE lists SET is_active = FALSE")
+	// Deactivate the other lists of the same workspace only
+	_, err = tx.Exec("UPDATE lists SET is_active = FALSE WHERE workspace_id = (SELECT workspace_id FROM lists WHERE id = ?)", id)
 	if err != nil {
 		return err
 	}
@@ -277,8 +280,11 @@ func MoveListUp(id int64) error {
 	}
 	defer tx.Rollback()
 
+	// sort_order is numbered per workspace, so a move only touches the
+	// neighbours inside the moved list's own workspace.
 	var currentOrder int
-	err = tx.QueryRow("SELECT sort_order FROM lists WHERE id = ?", id).Scan(&currentOrder)
+	var workspaceID int64
+	err = tx.QueryRow("SELECT sort_order, workspace_id FROM lists WHERE id = ?", id).Scan(&currentOrder, &workspaceID)
 	if err != nil {
 		return err
 	}
@@ -287,7 +293,7 @@ func MoveListUp(id int64) error {
 		return nil
 	}
 
-	_, err = tx.Exec(`UPDATE lists SET sort_order = sort_order + 1 WHERE sort_order = ?`, currentOrder-1)
+	_, err = tx.Exec(`UPDATE lists SET sort_order = sort_order + 1 WHERE sort_order = ? AND workspace_id = ?`, currentOrder-1, workspaceID)
 	if err != nil {
 		return err
 	}
@@ -309,11 +315,12 @@ func MoveListDown(id int64) error {
 	defer tx.Rollback()
 
 	var currentOrder, maxOrder int
-	err = tx.QueryRow("SELECT sort_order FROM lists WHERE id = ?", id).Scan(&currentOrder)
+	var workspaceID int64
+	err = tx.QueryRow("SELECT sort_order, workspace_id FROM lists WHERE id = ?", id).Scan(&currentOrder, &workspaceID)
 	if err != nil {
 		return err
 	}
-	err = tx.QueryRow("SELECT MAX(sort_order) FROM lists").Scan(&maxOrder)
+	err = tx.QueryRow("SELECT MAX(sort_order) FROM lists WHERE workspace_id = ?", workspaceID).Scan(&maxOrder)
 	if err != nil {
 		return err
 	}
@@ -322,7 +329,7 @@ func MoveListDown(id int64) error {
 		return nil
 	}
 
-	_, err = tx.Exec(`UPDATE lists SET sort_order = sort_order - 1 WHERE sort_order = ?`, currentOrder+1)
+	_, err = tx.Exec(`UPDATE lists SET sort_order = sort_order - 1 WHERE sort_order = ? AND workspace_id = ?`, currentOrder+1, workspaceID)
 	if err != nil {
 		return err
 	}
@@ -352,11 +359,11 @@ func GetListStats(listID int64) Stats {
 
 // ==================== SECTIONS ====================
 
-func GetAllSections() ([]Section, error) {
-	activeList, err := GetActiveList()
+func GetAllSections(workspaceID int64) ([]Section, error) {
+	activeList, err := GetActiveList(workspaceID)
 	if err != nil {
-		// Fallback: return all sections if no active list (shouldn't happen)
-		return getAllSectionsGlobal()
+		// Fallback: no active list, return every section of the workspace
+		return getAllSectionsInWorkspace(workspaceID)
 	}
 	return GetSectionsByList(activeList.ID)
 }
@@ -406,13 +413,14 @@ func GetSectionsByList(listID int64) ([]Section, error) {
 	return sections, nil
 }
 
-// getAllSectionsGlobal returns all sections (fallback, used during migration).
-func getAllSectionsGlobal() ([]Section, error) {
+// getAllSectionsInWorkspace returns all sections of a workspace (fallback when it has no active list).
+func getAllSectionsInWorkspace(workspaceID int64) ([]Section, error) {
 	rows, err := DB.Query(`
-		SELECT id, list_id, name, sort_order, COALESCE(sort_mode, 'manual'), created_at, COALESCE(updated_at, 0)
-		FROM sections
-		ORDER BY sort_order ASC
-	`)
+		SELECT s.id, s.list_id, s.name, s.sort_order, COALESCE(s.sort_mode, 'manual'), s.created_at, COALESCE(s.updated_at, 0)
+		FROM sections s JOIN lists l ON l.id = s.list_id
+		WHERE l.workspace_id = ?
+		ORDER BY s.sort_order ASC
+	`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -447,8 +455,8 @@ func GetSectionByID(id int64) (*Section, error) {
 	return &s, nil
 }
 
-func CreateSection(name string) (*Section, error) {
-	activeList, err := GetActiveList()
+func CreateSection(workspaceID int64, name string) (*Section, error) {
+	activeList, err := GetActiveList(workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("no active list found")
 	}
@@ -787,16 +795,16 @@ func DeleteItem(id int64) error {
 
 // DeleteCompletedItems atomically deletes all completed items from the active
 // list and returns the exact rows removed by the statement.
-func DeleteCompletedItems() ([]Item, error) {
+func DeleteCompletedItems(workspaceID int64) ([]Item, error) {
 	rows, err := DB.Query(`
 		DELETE FROM items WHERE completed = TRUE AND section_id IN (
 			SELECT s.id FROM sections s
 			JOIN lists l ON l.id = s.list_id
-			WHERE l.is_active = TRUE
+			WHERE l.is_active = TRUE AND l.workspace_id = ?
 		)
 		RETURNING id, section_id, name, description, completed, uncertain,
 		          COALESCE(quantity, 0), sort_order, created_at, COALESCE(updated_at, 0)
-	`)
+	`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1126,7 +1134,8 @@ func CreateSession(id string, expiresAt int64) error {
 
 func GetSession(id string) (*Session, error) {
 	var s Session
-	err := DB.QueryRow(`SELECT id, expires_at FROM sessions WHERE id = ?`, id).Scan(&s.ID, &s.ExpiresAt)
+	err := DB.QueryRow(`SELECT id, expires_at, COALESCE(user_id, 0), COALESCE(workspace_id, 0) FROM sessions WHERE id = ?`, id).
+		Scan(&s.ID, &s.ExpiresAt, &s.UserID, &s.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1151,19 +1160,23 @@ type Stats struct {
 	Percentage     int `json:"percentage"`
 }
 
-func GetStats() Stats {
-	activeList, err := GetActiveList()
+func GetStats(workspaceID int64) Stats {
+	activeList, err := GetActiveList(workspaceID)
 	if err != nil {
-		// Fallback to global stats
-		return getGlobalStats()
+		// Fallback to the stats of every item in the workspace
+		return getWorkspaceStats(workspaceID)
 	}
 	return GetListStats(activeList.ID)
 }
 
-// getGlobalStats returns stats for all items (fallback) using a single aggregated query.
-func getGlobalStats() Stats {
+// getWorkspaceStats returns stats for all items of a workspace (fallback) using a single aggregated query.
+func getWorkspaceStats(workspaceID int64) Stats {
 	var stats Stats
-	DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN completed = TRUE THEN 1 ELSE 0 END), 0) FROM items`).Scan(&stats.TotalItems, &stats.CompletedItems)
+	DB.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN i.completed = TRUE THEN 1 ELSE 0 END), 0)
+		FROM items i JOIN sections s ON s.id = i.section_id JOIN lists l ON l.id = s.list_id
+		WHERE l.workspace_id = ?
+	`, workspaceID).Scan(&stats.TotalItems, &stats.CompletedItems)
 	if stats.TotalItems > 0 {
 		stats.Percentage = (stats.CompletedItems * 100) / stats.TotalItems
 	}
@@ -1219,41 +1232,41 @@ type ItemSuggestion struct {
 }
 
 // SaveItemHistory saves or updates item name in history for auto-completion
-func SaveItemHistory(name string, sectionID int64) error {
+func SaveItemHistory(workspaceID int64, name string, sectionID int64) error {
 	_, err := DB.Exec(`
-		INSERT INTO item_history (name, last_section_id, usage_count, last_used_at)
-		VALUES (?, ?, 1, strftime('%s', 'now'))
-		ON CONFLICT(name COLLATE NOCASE) DO UPDATE SET
+		INSERT INTO item_history (workspace_id, name, last_section_id, usage_count, last_used_at)
+		VALUES (?, ?, ?, 1, strftime('%s', 'now'))
+		ON CONFLICT(workspace_id, name COLLATE NOCASE) DO UPDATE SET
 			last_section_id = excluded.last_section_id,
 			usage_count = usage_count + 1,
 			last_used_at = strftime('%s', 'now')
-	`, name, sectionID)
+	`, workspaceID, name, sectionID)
 	return err
 }
 
 // SaveItemHistoryWithCount saves item history with a specific usage count (used for import)
-func SaveItemHistoryWithCount(name string, sectionID int64, usageCount int) error {
+func SaveItemHistoryWithCount(workspaceID int64, name string, sectionID int64, usageCount int) error {
 	_, err := DB.Exec(`
-		INSERT INTO item_history (name, last_section_id, usage_count, last_used_at)
-		VALUES (?, ?, ?, strftime('%s', 'now'))
-		ON CONFLICT(name COLLATE NOCASE) DO UPDATE SET
+		INSERT INTO item_history (workspace_id, name, last_section_id, usage_count, last_used_at)
+		VALUES (?, ?, ?, ?, strftime('%s', 'now'))
+		ON CONFLICT(workspace_id, name COLLATE NOCASE) DO UPDATE SET
 			last_section_id = CASE WHEN excluded.last_section_id > 0 THEN excluded.last_section_id ELSE last_section_id END,
 			usage_count = CASE WHEN excluded.usage_count > usage_count THEN excluded.usage_count ELSE usage_count END,
 			last_used_at = strftime('%s', 'now')
-	`, name, sectionID, usageCount)
+	`, workspaceID, name, sectionID, usageCount)
 	return err
 }
 
 // SaveItemHistoryWithCountTx saves item history with a specific usage count within a transaction
-func SaveItemHistoryWithCountTx(tx *sql.Tx, name string, sectionID int64, usageCount int) error {
+func SaveItemHistoryWithCountTx(tx *sql.Tx, workspaceID int64, name string, sectionID int64, usageCount int) error {
 	_, err := tx.Exec(`
-		INSERT INTO item_history (name, last_section_id, usage_count, last_used_at)
-		VALUES (?, ?, ?, strftime('%s', 'now'))
-		ON CONFLICT(name COLLATE NOCASE) DO UPDATE SET
+		INSERT INTO item_history (workspace_id, name, last_section_id, usage_count, last_used_at)
+		VALUES (?, ?, ?, ?, strftime('%s', 'now'))
+		ON CONFLICT(workspace_id, name COLLATE NOCASE) DO UPDATE SET
 			last_section_id = CASE WHEN excluded.last_section_id > 0 THEN excluded.last_section_id ELSE last_section_id END,
 			usage_count = CASE WHEN excluded.usage_count > usage_count THEN excluded.usage_count ELSE usage_count END,
 			last_used_at = strftime('%s', 'now')
-	`, name, sectionID, usageCount)
+	`, workspaceID, name, sectionID, usageCount)
 	return err
 }
 
@@ -1344,7 +1357,7 @@ func scoreSuggestion(name, query string) int {
 }
 
 // GetItemSuggestions returns item name suggestions matching the query with fuzzy matching
-func GetItemSuggestions(query string, limit int) ([]ItemSuggestion, error) {
+func GetItemSuggestions(workspaceID int64, query string, limit int) ([]ItemSuggestion, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -1354,9 +1367,10 @@ func GetItemSuggestions(query string, limit int) ([]ItemSuggestion, error) {
 		SELECT h.name, COALESCE(h.last_section_id, 0), COALESCE(s.name, ''), h.usage_count
 		FROM item_history h
 		LEFT JOIN sections s ON h.last_section_id = s.id
+		WHERE h.workspace_id = ?
 		ORDER BY h.usage_count DESC, h.last_used_at DESC
 		LIMIT 200
-	`)
+	`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1400,7 +1414,7 @@ func GetItemSuggestions(query string, limit int) ([]ItemSuggestion, error) {
 }
 
 // GetAllItemSuggestions returns all item suggestions for offline cache
-func GetAllItemSuggestions(limit int) ([]ItemSuggestion, error) {
+func GetAllItemSuggestions(workspaceID int64, limit int) ([]ItemSuggestion, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -1409,9 +1423,10 @@ func GetAllItemSuggestions(limit int) ([]ItemSuggestion, error) {
 		SELECT h.name, COALESCE(h.last_section_id, 0), COALESCE(s.name, ''), h.usage_count
 		FROM item_history h
 		LEFT JOIN sections s ON h.last_section_id = s.id
+		WHERE h.workspace_id = ?
 		ORDER BY h.usage_count DESC, h.last_used_at DESC
 		LIMIT ?
-	`, limit)
+	`, workspaceID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1438,14 +1453,15 @@ type HistoryItem struct {
 }
 
 // GetItemHistoryList returns all history items for management UI
-func GetItemHistoryList() ([]HistoryItem, error) {
+func GetItemHistoryList(workspaceID int64) ([]HistoryItem, error) {
 	rows, err := DB.Query(`
 		SELECT h.id, h.name, COALESCE(h.last_section_id, 0), COALESCE(s.name, ''), h.usage_count
 		FROM item_history h
 		LEFT JOIN sections s ON h.last_section_id = s.id
+		WHERE h.workspace_id = ?
 		ORDER BY h.usage_count DESC, h.last_used_at DESC
 		LIMIT 100
-	`)
+	`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1463,8 +1479,8 @@ func GetItemHistoryList() ([]HistoryItem, error) {
 }
 
 // DeleteItemHistory deletes a single item from history
-func DeleteItemHistory(id int64) error {
-	result, err := DB.Exec("DELETE FROM item_history WHERE id = ?", id)
+func DeleteItemHistory(workspaceID, id int64) error {
+	result, err := DB.Exec("DELETE FROM item_history WHERE id = ? AND workspace_id = ?", id, workspaceID)
 	if err != nil {
 		return err
 	}
@@ -1476,7 +1492,7 @@ func DeleteItemHistory(id int64) error {
 }
 
 // DeleteItemHistoryBatch deletes multiple items from history
-func DeleteItemHistoryBatch(ids []int64) (int64, error) {
+func DeleteItemHistoryBatch(workspaceID int64, ids []int64) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -1489,8 +1505,8 @@ func DeleteItemHistoryBatch(ids []int64) (int64, error) {
 		args[i] = id
 	}
 
-	query := fmt.Sprintf("DELETE FROM item_history WHERE id IN (%s)", strings.Join(placeholders, ","))
-	result, err := DB.Exec(query, args...)
+	query := fmt.Sprintf("DELETE FROM item_history WHERE workspace_id = ? AND id IN (%s)", strings.Join(placeholders, ","))
+	result, err := DB.Exec(query, append([]interface{}{workspaceID}, args...)...)
 	if err != nil {
 		return 0, err
 	}
@@ -1500,12 +1516,13 @@ func DeleteItemHistoryBatch(ids []int64) (int64, error) {
 // ==================== TEMPLATES ====================
 
 // GetAllTemplates returns all templates with their items.
-func GetAllTemplates() ([]Template, error) {
+func GetAllTemplates(workspaceID int64) ([]Template, error) {
 	rows, err := DB.Query(`
 		SELECT id, name, description, sort_order, created_at, COALESCE(updated_at, 0)
 		FROM templates
+		WHERE workspace_id = ?
 		ORDER BY sort_order ASC
-	`)
+	`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1579,13 +1596,13 @@ func GetTemplateItems(templateID int64) ([]TemplateItem, error) {
 }
 
 // CreateTemplate creates a new template
-func CreateTemplate(name, description string) (*Template, error) {
+func CreateTemplate(workspaceID int64, name, description string) (*Template, error) {
 	var maxOrder int
-	DB.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM templates").Scan(&maxOrder)
+	DB.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM templates WHERE workspace_id = ?", workspaceID).Scan(&maxOrder)
 
 	result, err := DB.Exec(`
-		INSERT INTO templates (name, description, sort_order) VALUES (?, ?, ?)
-	`, name, description, maxOrder+1)
+		INSERT INTO templates (name, description, sort_order, workspace_id) VALUES (?, ?, ?, ?)
+	`, name, description, maxOrder+1, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1671,6 +1688,11 @@ func ApplyTemplateToList(templateID, listID int64) error {
 	}
 	defer tx.Rollback()
 
+	var workspaceID int64
+	if err := tx.QueryRow(`SELECT workspace_id FROM lists WHERE id = ?`, listID).Scan(&workspaceID); err != nil {
+		return err
+	}
+
 	// Group items by section name
 	sectionItems := make(map[string][]TemplateItem)
 	for _, item := range template.Items {
@@ -1713,14 +1735,16 @@ func ApplyTemplateToList(templateID, listID int64) error {
 			}
 
 			// Save to item history
-			tx.Exec(`
-				INSERT INTO item_history (name, last_section_id, usage_count, last_used_at)
-				VALUES (?, ?, 1, strftime('%s', 'now'))
-				ON CONFLICT(name COLLATE NOCASE) DO UPDATE SET
+			if _, err := tx.Exec(`
+				INSERT INTO item_history (workspace_id, name, last_section_id, usage_count, last_used_at)
+				VALUES (?, ?, ?, 1, strftime('%s', 'now'))
+				ON CONFLICT(workspace_id, name COLLATE NOCASE) DO UPDATE SET
 					last_section_id = excluded.last_section_id,
 					usage_count = usage_count + 1,
 					last_used_at = strftime('%s', 'now')
-			`, item.Name, sectionID)
+			`, workspaceID, item.Name, sectionID); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1728,7 +1752,7 @@ func ApplyTemplateToList(templateID, listID int64) error {
 }
 
 // CreateTemplateFromList creates a template from an existing list
-func CreateTemplateFromList(listID int64, templateName, templateDescription string) (*Template, error) {
+func CreateTemplateFromList(workspaceID, listID int64, templateName, templateDescription string) (*Template, error) {
 	sections, err := GetSectionsByList(listID)
 	if err != nil {
 		return nil, err
@@ -1742,11 +1766,13 @@ func CreateTemplateFromList(listID int64, templateName, templateDescription stri
 
 	// Create template
 	var maxOrder int
-	tx.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM templates").Scan(&maxOrder)
+	if err := tx.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM templates WHERE workspace_id = ?", workspaceID).Scan(&maxOrder); err != nil {
+		return nil, err
+	}
 
 	result, err := tx.Exec(`
-		INSERT INTO templates (name, description, sort_order) VALUES (?, ?, ?)
-	`, templateName, templateDescription, maxOrder+1)
+		INSERT INTO templates (name, description, sort_order, workspace_id) VALUES (?, ?, ?, ?)
+	`, templateName, templateDescription, maxOrder+1, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1780,15 +1806,15 @@ func CreateTemplateFromList(listID int64, templateName, templateDescription stri
 // ==================== TRANSACTION HELPERS (for batch API) ====================
 
 // CreateTemplateTx creates a template within an existing transaction.
-func CreateTemplateTx(tx *sql.Tx, name, description string) (*Template, error) {
+func CreateTemplateTx(tx *sql.Tx, workspaceID int64, name, description string) (*Template, error) {
 	var maxOrder int
-	if err := tx.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM templates").Scan(&maxOrder); err != nil {
+	if err := tx.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM templates WHERE workspace_id = ?", workspaceID).Scan(&maxOrder); err != nil {
 		return nil, err
 	}
 
 	result, err := tx.Exec(`
-		INSERT INTO templates (name, description, sort_order) VALUES (?, ?, ?)
-	`, name, description, maxOrder+1)
+		INSERT INTO templates (name, description, sort_order, workspace_id) VALUES (?, ?, ?, ?)
+	`, name, description, maxOrder+1, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1860,17 +1886,17 @@ func AddTemplateItemTx(tx *sql.Tx, templateID int64, sectionName, name, descript
 }
 
 // CreateListTx creates a list within a transaction
-func CreateListTx(tx *sql.Tx, name, icon string) (*List, error) {
+func CreateListTx(tx *sql.Tx, workspaceID int64, name, icon string) (*List, error) {
 	var maxOrder int
-	tx.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM lists").Scan(&maxOrder)
+	tx.QueryRow("SELECT COALESCE(MAX(sort_order), -1) FROM lists WHERE workspace_id = ?", workspaceID).Scan(&maxOrder)
 
 	if icon == "" {
 		icon = "🛒"
 	}
 
 	result, err := tx.Exec(`
-		INSERT INTO lists (name, icon, sort_order, is_active) VALUES (?, ?, ?, FALSE)
-	`, name, icon, maxOrder+1)
+		INSERT INTO lists (name, icon, sort_order, is_active, workspace_id) VALUES (?, ?, ?, FALSE, ?)
+	`, name, icon, maxOrder+1, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1934,14 +1960,14 @@ func CreateItemTx(tx *sql.Tx, sectionID int64, name, description string, quantit
 }
 
 // SaveItemHistoryTx saves item name to history within a transaction
-func SaveItemHistoryTx(tx *sql.Tx, name string, sectionID int64) {
+func SaveItemHistoryTx(tx *sql.Tx, workspaceID int64, name string, sectionID int64) {
 	tx.Exec(`
-		INSERT INTO item_history (name, last_section_id, usage_count)
-		VALUES (?, ?, 1)
-		ON CONFLICT(name) DO UPDATE SET
+		INSERT INTO item_history (workspace_id, name, last_section_id, usage_count)
+		VALUES (?, ?, ?, 1)
+		ON CONFLICT(workspace_id, name COLLATE NOCASE) DO UPDATE SET
 			usage_count = usage_count + 1,
 			last_section_id = excluded.last_section_id
-	`, name, sectionID)
+	`, workspaceID, name, sectionID)
 }
 
 // GetMaxSectionOrderTx gets max sort_order for sections in a list within a transaction
@@ -1958,19 +1984,21 @@ func GetMaxItemOrderTx(tx *sql.Tx, sectionID int64) int {
 	return maxOrder
 }
 
-// GetSectionIDByNameTx finds section ID by name (case-insensitive) within a transaction
+// GetSectionIDByNameTx finds a section ID by name (case-insensitive) within one workspace
 // Returns 0 if section not found
-func GetSectionIDByNameTx(tx *sql.Tx, sectionName string) int64 {
+func GetSectionIDByNameTx(tx *sql.Tx, workspaceID int64, sectionName string) int64 {
 	if sectionName == "" {
 		return 0
 	}
 
 	var sectionID int64
 	err := tx.QueryRow(`
-		SELECT id FROM sections
-		WHERE name = ? COLLATE NOCASE
+		SELECT s.id FROM sections s
+		JOIN lists l ON l.id = s.list_id
+		WHERE s.name = ? COLLATE NOCASE AND l.workspace_id = ?
+		ORDER BY s.id
 		LIMIT 1
-	`, sectionName).Scan(&sectionID)
+	`, sectionName, workspaceID).Scan(&sectionID)
 
 	if err != nil {
 		return 0
@@ -1980,14 +2008,15 @@ func GetSectionIDByNameTx(tx *sql.Tx, sectionName string) int64 {
 
 // GetSectionNameForItem finds the section name where an item currently exists
 // Used as fallback when last_section_id is not set in history
-func GetSectionNameForItem(itemName string) string {
+func GetSectionNameForItem(workspaceID int64, itemName string) string {
 	var sectionName string
 	err := DB.QueryRow(`
 		SELECT s.name FROM items i
 		JOIN sections s ON i.section_id = s.id
-		WHERE i.name = ? COLLATE NOCASE
+		JOIN lists l ON l.id = s.list_id
+		WHERE i.name = ? COLLATE NOCASE AND l.workspace_id = ?
 		LIMIT 1
-	`, itemName).Scan(&sectionName)
+	`, itemName, workspaceID).Scan(&sectionName)
 
 	if err != nil {
 		return ""
@@ -1996,48 +2025,3 @@ func GetSectionNameForItem(itemName string) string {
 }
 
 // ==================== DATABASE CLEAR ====================
-
-// ClearAllData clears all user data from database (lists, sections, items, templates, history)
-// Sessions are preserved so user remains logged in
-func ClearAllData() error {
-	tx, err := DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	// Delete in proper order due to foreign key constraints
-	// 1. template_items (references templates)
-	if _, err := tx.Exec("DELETE FROM template_items"); err != nil {
-		return fmt.Errorf("failed to delete template_items: %w", err)
-	}
-
-	// 2. templates
-	if _, err := tx.Exec("DELETE FROM templates"); err != nil {
-		return fmt.Errorf("failed to delete templates: %w", err)
-	}
-
-	// 3. items (references sections)
-	if _, err := tx.Exec("DELETE FROM items"); err != nil {
-		return fmt.Errorf("failed to delete items: %w", err)
-	}
-
-	// 4. sections (references lists)
-	if _, err := tx.Exec("DELETE FROM sections"); err != nil {
-		return fmt.Errorf("failed to delete sections: %w", err)
-	}
-
-	// 5. lists
-	if _, err := tx.Exec("DELETE FROM lists"); err != nil {
-		return fmt.Errorf("failed to delete lists: %w", err)
-	}
-
-	// 6. item_history
-	if _, err := tx.Exec("DELETE FROM item_history"); err != nil {
-		return fmt.Errorf("failed to delete item_history: %w", err)
-	}
-
-	// Note: sessions are NOT deleted - user remains logged in
-
-	return tx.Commit()
-}

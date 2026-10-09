@@ -77,7 +77,7 @@ func ExportAllData(c *fiber.Ctx) error {
 	includeTemplates := c.Query("include_templates", "true") == "true"
 	includeHistory := c.Query("include_history", "true") == "true"
 
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(WorkspaceID(c))
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch lists"})
 	}
@@ -163,7 +163,7 @@ func exportAllAsJSON(c *fiber.Ctx, lists []db.List, includeTemplates, includeHis
 
 	// Include templates if requested
 	if includeTemplates {
-		templates, err := db.GetAllTemplates()
+		templates, err := db.GetAllTemplates(WorkspaceID(c))
 		if err == nil {
 			exportData.Data.Templates = make([]ExportTemplate, 0, len(templates))
 			for _, tmpl := range templates {
@@ -186,14 +186,14 @@ func exportAllAsJSON(c *fiber.Ctx, lists []db.List, includeTemplates, includeHis
 
 	// Include history if requested
 	if includeHistory {
-		historyItems, err := db.GetAllItemSuggestions(1000)
+		historyItems, err := db.GetAllItemSuggestions(WorkspaceID(c), 1000)
 		if err == nil {
 			exportData.Data.History = make([]ExportHistory, 0, len(historyItems))
 			for _, h := range historyItems {
 				sectionName := h.LastSectionName
 				// Fallback: if no section in history, find where item currently exists
 				if sectionName == "" {
-					sectionName = db.GetSectionNameForItem(h.Name)
+					sectionName = db.GetSectionNameForItem(WorkspaceID(c), h.Name)
 				}
 				exportData.Data.History = append(exportData.Data.History, ExportHistory{
 					Name:        h.Name,
@@ -319,13 +319,13 @@ func exportAllAsCSV(c *fiber.Ctx, lists []db.List) error {
 	// Export history if requested
 	// Format: [HISTORY],,item_name,last_section,usage_count,,
 	if includeHistory {
-		historyItems, err := db.GetAllItemSuggestions(1000)
+		historyItems, err := db.GetAllItemSuggestions(WorkspaceID(c), 1000)
 		if err == nil {
 			for _, h := range historyItems {
 				sectionName := h.LastSectionName
 				// Fallback: if no section in history, find where item currently exists
 				if sectionName == "" {
-					sectionName = db.GetSectionNameForItem(h.Name)
+					sectionName = db.GetSectionNameForItem(WorkspaceID(c), h.Name)
 				}
 				writer.Write([]string{
 					"[HISTORY]",
@@ -395,13 +395,13 @@ func sanitizeFilename(name string) string {
 
 // GetExportPreview returns a preview of what will be exported (for UI)
 func GetExportPreview(c *fiber.Ctx) error {
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(WorkspaceID(c))
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch lists"})
 	}
 
-	templates, _ := db.GetAllTemplates()
-	history, _ := db.GetAllItemSuggestions(100)
+	templates, _ := db.GetAllTemplates(WorkspaceID(c))
+	history, _ := db.GetAllItemSuggestions(WorkspaceID(c), 100)
 
 	totalItems := 0
 	for _, list := range lists {

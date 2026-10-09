@@ -16,7 +16,7 @@ const (
 
 // GetLists returns all lists
 func GetLists(c *fiber.Ctx) error {
-	lists, err := db.GetAllLists()
+	lists, err := db.GetAllLists(handlers.WorkspaceID(c))
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "db_error",
@@ -92,7 +92,7 @@ func CreateList(c *fiber.Ctx) error {
 	}
 
 	// Check for duplicate name
-	exists, err := db.ListNameExists(req.Name, 0)
+	exists, err := db.ListNameExists(handlers.WorkspaceID(c), req.Name, 0)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "db_error",
@@ -107,7 +107,7 @@ func CreateList(c *fiber.Ctx) error {
 	}
 
 	icon := NormalizeIcon(req.Icon)
-	list, err := db.CreateList(req.Name, icon)
+	list, err := db.CreateList(handlers.WorkspaceID(c), req.Name, icon)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "create_failed",
@@ -115,7 +115,7 @@ func CreateList(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("list_created", list)
+	handlers.BroadcastUpdate(c, "list_created", list)
 	return c.Status(fiber.StatusCreated).JSON(list)
 }
 
@@ -178,7 +178,7 @@ func UpdateList(c *fiber.Ctx) error {
 	}
 
 	// Check for duplicate name (excluding current list)
-	exists, err := db.ListNameExists(name, int64(id))
+	exists, err := db.ListNameExists(handlers.WorkspaceID(c), name, int64(id))
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "db_error",
@@ -211,7 +211,7 @@ func UpdateList(c *fiber.Ctx) error {
 		}
 	}
 
-	handlers.BroadcastUpdate("list_updated", list)
+	handlers.BroadcastUpdate(c, "list_updated", list)
 	return c.JSON(list)
 }
 
@@ -248,7 +248,7 @@ func DeleteList(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("list_deleted", map[string]int64{"id": int64(id)})
+	handlers.BroadcastUpdate(c, "list_deleted", map[string]int64{"id": int64(id)})
 	handlers.NotifyPreparedItemWebhooks(webhook.EventItemDeleted, preparedWebhooks)
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -321,7 +321,7 @@ func MoveListUp(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("lists_reordered", nil)
+	handlers.BroadcastUpdate(c, "lists_reordered", nil)
 
 	list, _ := db.GetListByID(int64(id))
 	return c.JSON(list)
@@ -359,7 +359,7 @@ func MoveListDown(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("lists_reordered", nil)
+	handlers.BroadcastUpdate(c, "lists_reordered", nil)
 
 	list, _ := db.GetListByID(int64(id))
 	return c.JSON(list)

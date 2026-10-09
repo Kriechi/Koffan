@@ -37,7 +37,7 @@ Pronounced **KOF-fan** (rhymes with "coffin" but with an "a" at the end). The na
 
 Koffan is a lightweight web application for managing shopping lists, designed for couples and families. It allows real-time synchronization between multiple devices, so everyone knows what to buy and what's already in the cart.
 
-The app works in any browser on both mobile and desktop. Just one password to log in - no complicated registration required.
+The app works in any browser on both mobile and desktop. Just one password to log in - no complicated registration required. If several households share one server, you can optionally give everyone their own login and keep separate lists for each household.
 
 ## Why did I build this?
 
@@ -49,6 +49,7 @@ I built the first version in **Next.js**, but it turned out to be very resource-
 
 - **Ultra-lightweight** - ~16 MB on disk, ~2.5 MB RAM
 - **Multiple lists** - Create separate lists for different stores or purposes, with custom icons
+- **Accounts and workspaces (optional)** - Personal logins and separate lists for several households on one server ([details](#accounts-and-workspaces-optional))
 - **PWA** - Install on your phone like a native app
 - **Offline mode** - Create, edit and delete lists, sections and products without internet, with automatic synchronization when the connection returns
 - **Auto-completion** - Fuzzy search suggestions from your history, remembers sections
@@ -59,7 +60,7 @@ I built the first version in **Next.js**, but it turned out to be very resource-
 - Responsive interface (mobile-first)
 - **Dark mode** - Automatic theme based on system preferences
 - Support for [18 languages](i18n/README.md#supported-languages), including all offline and synchronization messages
-- Simple login system
+- Simple login - one shared password, or personal accounts with `MULTI_USER=true`
 - Rate limiting protection against brute-force attacks
 - **REST API** - Programmatic access for integrations and migrations ([docs](https://github.com/PanSalut/Koffan/wiki/REST-API))
 - **Outbound webhooks** - Signed item events for automation tools such as n8n, Node-RED, and Zapier ([docs](https://github.com/PanSalut/Koffan/wiki/Webhooks))
@@ -81,13 +82,17 @@ Other shoppers see your offline changes after they reach the server. Changes to 
 
 If a change cannot be applied, for example because another shopper deleted the edited product, it stays pending and the app offers retry and discard controls. Discarding a failed change can also remove local changes that depend on it.
 
-Initial setup and login, imports, and history management require a connection. Clearing site data removes unsynchronized changes, and browser or operating-system storage cleanup can also remove offline data.
+Initial setup and login, imports, history management and switching workspaces require a connection. Clearing site data removes unsynchronized changes, and browser or operating-system storage cleanup can also remove offline data. With [accounts](#accounts-and-workspaces-optional), the offline copy belongs to one account and workspace: switching to another workspace, or signing in with another account in the same browser, removes it, including changes that have not been synchronized yet. Let pending changes synchronize (or retry or discard failed ones) before you switch.
 
 ## Tech Stack
 
 - **Backend:** Go 1.25+ (Go 1.26.6 toolchain) + Fiber
 - **Frontend:** HTMX + Alpine.js + Tailwind CSS
 - **Database:** SQLite
+
+## Upgrading
+
+> **Upgrading to 2.16.0? Back up your database file first.** On its first start, 2.16.0 migrates the database (item history becomes per workspace), whether or not you enable accounts. Older versions cannot save item history on a migrated database, and they ignore workspaces, so anyone with the shared password would see the lists of every workspace. There is no downgrade path: to go back, stop Koffan and restore the backup (changes made since then are lost). The database is the file set in `DB_PATH` (`/data/shopping.db` in Docker).
 
 ## Local Setup (without Docker)
 
@@ -163,16 +168,18 @@ App available at http://localhost:3000
 ### Build from source
 
 ```bash
-docker-compose up -d
+docker compose -f docker-compose.local.yaml up -d
 # App available at http://localhost:8080
 ```
+
+`docker-compose.yaml` only exposes the port to other containers (for Coolify and reverse proxies); `docker-compose.local.yaml` also publishes it on the host.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `APP_ENV` | `development` | Set to `production` for secure cookies |
-| `APP_PASSWORD` | `shopping123` | Login password |
+| `APP_PASSWORD` | `shopping123` | Shared login password; with `MULTI_USER`, the password of the first administrator |
 | `DISABLE_AUTH` | `false` | Set to `true` to disable authentication (for reverse proxy setups) |
 | `PORT` | `8080` (Docker) / `3000` (local) | Server port |
 | `HTTP_READ_BUFFER_SIZE` | `16384` | Max size in bytes for request headers (raise if you see HTTP 431 behind an SSO proxy) |
@@ -182,9 +189,63 @@ docker-compose up -d
 | `LOGIN_WINDOW_MINUTES` | `15` | Time window for counting attempts |
 | `LOGIN_LOCKOUT_MINUTES` | `30` | Lockout duration after exceeding limit |
 | `API_TOKEN` | *(disabled)* | Enable REST API with this token ([docs](https://github.com/PanSalut/Koffan/wiki/REST-API)) |
+| `MULTI_USER` | `false` | Set to exactly `true` to enable accounts and workspaces ([see below](#accounts-and-workspaces-optional)); ignored when `DISABLE_AUTH=true` |
+| `ADMIN_USER` | `admin` | With `MULTI_USER`: username of the first administrator, created on the first start with accounts enabled, using `APP_PASSWORD` (which must not be the built-in default) |
+| `API_WORKSPACE_ID` | `1` | With `MULTI_USER`: id of the workspace the REST API token works on ([details](#rest-api-and-webhooks-with-accounts)); ignored without `MULTI_USER` |
 | `WEBHOOK_URL` | *(disabled)* | HTTP or HTTPS endpoint for outbound item events |
 | `WEBHOOK_SECRET` | *(none)* | Secret used to sign webhook payloads with HMAC-SHA256 |
 | `WEBHOOK_EVENTS` | *(all item events)* | Comma-separated filter: `item.created`, `item.updated`, `item.completed`, `item.deleted` |
+
+### Accounts and Workspaces (optional)
+
+By default Koffan has one shared password and behaves exactly as before. Set `MULTI_USER=true` (exactly that value) to give every person their own login and to keep separate lists for several households on one server.
+
+#### Turning accounts on
+
+1. Back up your database file (see [Upgrading](#upgrading)).
+2. Set `MULTI_USER=true` and your own `APP_PASSWORD` (at least 8 characters, not the built-in default `shopping123`). Optionally set `ADMIN_USER` (default `admin`).
+3. Restart Koffan and look for `Created administrator "admin"` in the log. Everyone signed in with the shared password is signed out.
+4. Sign in as the administrator and open *Manage workspaces* from the workspace menu in the header. Create an account for each person and keep *Add to the current workspace* ticked to put them in "Home", the default workspace that holds all your existing lists.
+
+With Docker Compose, put the settings in a `.env` file next to the compose file:
+
+```bash
+MULTI_USER=true
+APP_PASSWORD=choose-a-long-password
+ADMIN_USER=admin
+```
+
+#### How it works
+
+- A **workspace** is a group of lists, templates and autocomplete history shared by the people in it (a household, the in-laws, a parent), with a name and an icon. One person can belong to several workspaces and switch between them from the header.
+- Everyone in a workspace sees its lists; people outside it cannot.
+- Anyone signed in can create a workspace and becomes its owner. Owners rename it, change its icon, add and remove people, clear its data and delete it. Members use its lists and can leave it. "Home" cannot be deleted.
+- **Administrators** create and delete accounts and set new passwords. They can also manage any workspace (rename it, delete it, add or remove people), even one they are not in, but they only see its lists after adding themselves to it, which shows them in its member list. The first administrator is created from `ADMIN_USER` and `APP_PASSWORD`; the last administrator cannot be deleted.
+- There is no e-mail or self-service sign-up: an administrator creates the account and hands over the username and password. Usernames have up to 40 characters, no spaces or commas, and are not case-sensitive.
+- Everyone can change their own password under *Your account* on the *Workspaces* page. The current password is required, wrong guesses count against the login rate limit, and the change signs you out on your other devices. A password set by an administrator (for someone who forgot theirs) signs that account out everywhere.
+- Export, import and *Clear database* work on the current workspace only. Only its owners and administrators can clear it.
+- Real-time updates only reach the people in the workspace that changed. Someone who is removed from a workspace, deleted, signed out or given a new password stops receiving them at once.
+- `APP_PASSWORD` is only used to create the first administrator; changing it later changes no one's password. Keep it set anyway: if you turn accounts off again, it becomes the shared password again (without it, the built-in default `shopping123` applies).
+- Turning accounts off again brings back the shared password. Nothing is deleted, but only "Home" is reachable (the other workspaces return when you turn accounts on again), and account sessions stop working.
+- `DISABLE_AUTH=true` (for example with forward-auth at a proxy) turns accounts off.
+
+#### REST API and webhooks with accounts
+
+- The REST API token works on one workspace, `API_WORKSPACE_ID` (default `1`, "Home"). Anything in other workspaces behaves as if it did not exist. Find workspace ids with `sqlite3 /path/to/shopping.db "SELECT id, name FROM workspaces;"`. While the API is enabled, that workspace cannot be deleted; if it is missing, the API answers `503`.
+- **Outbound webhooks are not per workspace.** `WEBHOOK_URL` receives the item events of every workspace, including list and section names, and the payload carries no workspace id. On an instance shared by several households, leave webhooks disabled unless everyone trusts the receiver.
+
+#### Behind a reverse proxy
+
+- Login rate limiting counts attempts per client IP, and Koffan does not read forwarded IP headers. Behind a reverse proxy all accounts therefore share one limit, and one person's wrong passwords can lock everyone out for `LOGIN_LOCKOUT_MINUTES`. Set `LOGIN_MAX_ATTEMPTS=0` and limit login attempts at the proxy instead (see [Login Rate Limiting](#login-rate-limiting)).
+- With accounts, Koffan refuses changes and live updates requested by pages from other origins. Over HTTPS the browser reports where a request comes from. Over plain HTTP, Koffan compares the request's `Origin` with its `Host`, so a proxy serving Koffan over plain HTTP must pass the original `Host` header or set `X-Forwarded-Host`. Caddy and Traefik do this by default; with nginx add `proxy_set_header Host $host;`.
+
+#### Forgotten administrator password
+
+With a second administrator, they can simply set a new password. If the only administrator forgot theirs:
+
+1. Back up the database file and stop Koffan.
+2. Delete all accounts: `sqlite3 /path/to/shopping.db "PRAGMA foreign_keys=ON; DELETE FROM users;"`. For the Docker volume from the Quick Start: `docker run --rm -v koffan-data:/data alpine sh -c 'apk add --no-cache sqlite >/dev/null && sqlite3 /data/shopping.db "PRAGMA foreign_keys=ON; DELETE FROM users;"'`
+3. Start Koffan again with `MULTI_USER=true` and a new `APP_PASSWORD`. The administrator is created again and owns "Home". All other accounts are removed as well, so create them again. Their workspaces and lists are kept: add yourself to each workspace as administrator and add the people back.
 
 ### Login Rate Limiting
 
@@ -229,13 +290,14 @@ Data is stored in `/data/shopping.db`. The volume ensures your data persists acr
 ## Documentation
 
 - [Offline behavior](#shopping-offline) - Capabilities, synchronization and limitations
+- [Accounts and workspaces](#accounts-and-workspaces-optional) - Personal logins and separate lists for several households
 - [Translation guide](i18n/README.md) - Supported languages and updating translations
 
 For more information, check the **[Wiki](https://github.com/PanSalut/Koffan/wiki)**:
 
 - [REST API](https://github.com/PanSalut/Koffan/wiki/REST-API) - Programmatic access, migrations, integrations
 - [Webhooks](https://github.com/PanSalut/Koffan/wiki/Webhooks) - Outbound item events for automation and notifications
-- [Multiple Instances](https://github.com/PanSalut/Koffan/wiki/Multiple-Instances) - Running separate instances for different households
+- [Multiple Instances](https://github.com/PanSalut/Koffan/wiki/Multiple-Instances) - Running separate instances for different households (or use [accounts and workspaces](#accounts-and-workspaces-optional) on one instance)
 
 ## Feature Requests
 

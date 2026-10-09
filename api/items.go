@@ -80,7 +80,7 @@ func CreateItem(c *fiber.Ctx) error {
 	}
 
 	// Check if section exists
-	_, err := db.GetSectionByID(req.SectionID)
+	_, err := ownedSection(c, req.SectionID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
@@ -121,8 +121,8 @@ func CreateItem(c *fiber.Ctx) error {
 					Message: "Failed to reactivate item",
 				})
 			}
-			db.SaveItemHistory(req.Name, req.SectionID)
-			handlers.BroadcastUpdate("item_toggled", item)
+			db.SaveItemHistory(handlers.WorkspaceID(c), req.Name, req.SectionID)
+			handlers.BroadcastUpdate(c, "item_toggled", item)
 			handlers.NotifyItemWebhook(webhook.EventItemUpdated, item)
 			return c.JSON(fiber.Map{
 				"item":        item,
@@ -145,9 +145,9 @@ func CreateItem(c *fiber.Ctx) error {
 	}
 
 	// Save to item history for suggestions
-	db.SaveItemHistory(req.Name, req.SectionID)
+	db.SaveItemHistory(handlers.WorkspaceID(c), req.Name, req.SectionID)
 
-	handlers.BroadcastUpdate("item_created", item)
+	handlers.BroadcastUpdate(c, "item_created", item)
 	handlers.NotifyItemWebhook(webhook.EventItemCreated, item)
 	return c.Status(fiber.StatusCreated).JSON(item)
 }
@@ -222,7 +222,7 @@ func UpdateItem(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("item_updated", item)
+	handlers.BroadcastUpdate(c, "item_updated", item)
 	handlers.NotifyItemWebhook(webhook.EventItemUpdated, item)
 	return c.JSON(item)
 }
@@ -259,7 +259,7 @@ func DeleteItem(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("item_deleted", map[string]int64{"id": int64(id)})
+	handlers.BroadcastUpdate(c, "item_deleted", map[string]int64{"id": int64(id)})
 	handlers.NotifyItemWebhook(webhook.EventItemDeleted, item)
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -297,7 +297,7 @@ func ToggleItemCompleted(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("item_toggled", item)
+	handlers.BroadcastUpdate(c, "item_toggled", item)
 	event := webhook.EventItemUpdated
 	if item.Completed {
 		event = webhook.EventItemCompleted
@@ -339,7 +339,7 @@ func ToggleItemUncertain(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("item_updated", item)
+	handlers.BroadcastUpdate(c, "item_updated", item)
 	handlers.NotifyItemWebhook(webhook.EventItemUpdated, item)
 	return c.JSON(item)
 }
@@ -385,7 +385,7 @@ func AdjustItemQuantity(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("item_updated", item)
+	handlers.BroadcastUpdate(c, "item_updated", item)
 	handlers.NotifyItemWebhook(webhook.EventItemUpdated, item)
 	return c.JSON(item)
 }
@@ -431,7 +431,7 @@ func MoveItem(c *fiber.Ctx) error {
 	}
 
 	// Check if target section exists
-	_, err = db.GetSectionByID(req.SectionID)
+	_, err = ownedSection(c, req.SectionID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
@@ -453,7 +453,7 @@ func MoveItem(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("item_moved", item)
+	handlers.BroadcastUpdate(c, "item_moved", item)
 	handlers.NotifyItemWebhook(webhook.EventItemUpdated, item)
 	return c.JSON(item)
 }
@@ -490,7 +490,7 @@ func MoveItemUp(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("items_reordered", map[string]int64{"section_id": item.SectionID})
+	handlers.BroadcastUpdate(c, "items_reordered", map[string]int64{"section_id": item.SectionID})
 
 	updatedItem, _ := db.GetItemByID(int64(id))
 	handlers.NotifyItemWebhook(webhook.EventItemUpdated, updatedItem)
@@ -529,7 +529,7 @@ func MoveItemDown(c *fiber.Ctx) error {
 		})
 	}
 
-	handlers.BroadcastUpdate("items_reordered", map[string]int64{"section_id": item.SectionID})
+	handlers.BroadcastUpdate(c, "items_reordered", map[string]int64{"section_id": item.SectionID})
 
 	updatedItem, _ := db.GetItemByID(int64(id))
 	handlers.NotifyItemWebhook(webhook.EventItemUpdated, updatedItem)

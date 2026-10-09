@@ -93,11 +93,28 @@
              x-text="t('login.error_rate_limited')">
         </div>
         {{else if .Error}}
-        <div class="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-4 py-3 rounded-xl mb-6 text-sm" x-text="t('login.error_invalid')">
+        <div class="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-4 py-3 rounded-xl mb-6 text-sm" x-text="t({{if .MultiUser}}'login.error_invalid_account'{{else}}'login.error_invalid'{{end}})">
         </div>
         {{end}}
 
         <form action="/login" method="POST">
+            {{if .MultiUser}}
+            <div class="mb-4">
+                <label for="username" class="block text-stone-600 dark:text-stone-400 text-sm font-medium mb-2" x-text="t('login.username')">
+                </label>
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    class="w-full border border-stone-200 dark:border-stone-600 dark:bg-stone-700 rounded-lg px-4 py-3 text-sm text-stone-700 dark:text-stone-100 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-transparent"
+                    :placeholder="t('login.username_placeholder')"
+                    autocomplete="username"
+                    autocapitalize="none"
+                    autofocus
+                    required
+                >
+            </div>
+            {{end}}
             <div class="mb-6">
                 <label for="password" class="block text-stone-600 dark:text-stone-400 text-sm font-medium mb-2" x-text="t('login.password')">
                 </label>
@@ -107,7 +124,8 @@
                     name="password"
                     class="w-full border border-stone-200 dark:border-stone-600 dark:bg-stone-700 rounded-lg px-4 py-3 text-sm text-stone-700 dark:text-stone-100 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-transparent"
                     :placeholder="t('login.password_placeholder')"
-                    autofocus
+                    autocomplete="current-password"
+                    {{if not .MultiUser}}autofocus{{end}}
                     required
                 >
             </div>

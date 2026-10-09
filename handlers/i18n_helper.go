@@ -21,6 +21,7 @@ func withPageI18n(c *fiber.Ctx, data fiber.Map) fiber.Map {
 	data["PageLang"] = lang
 	data["Locales"] = i18n.AvailableLocales()
 	data["DefaultLang"] = i18n.GetDefaultLang()
+	addWorkspaceContext(c, data)
 	return data
 }
 

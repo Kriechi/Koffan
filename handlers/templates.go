@@ -10,7 +10,7 @@ import (
 
 // GetTemplates returns all templates
 func GetTemplates(c *fiber.Ctx) error {
-	templates, err := db.GetAllTemplates()
+	templates, err := db.GetAllTemplates(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.fetch_failed")
 	}
@@ -56,13 +56,13 @@ func CreateTemplate(c *fiber.Ctx) error {
 
 	description := c.FormValue("description")
 
-	template, err := db.CreateTemplate(name, description)
+	template, err := db.CreateTemplate(WorkspaceID(c), name, description)
 	if err != nil {
 		return sendError(c, 500, "error.create_failed")
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("template_created", template)
+	BroadcastUpdate(c, "template_created", template)
 
 	// Return the new template partial
 	return c.Render("partials/template_item", fiber.Map{
@@ -90,7 +90,7 @@ func UpdateTemplate(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("template_updated", template)
+	BroadcastUpdate(c, "template_updated", template)
 
 	// Return updated template partial
 	return c.Render("partials/template_item", fiber.Map{
@@ -111,7 +111,7 @@ func DeleteTemplate(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("template_deleted", map[string]int64{"id": id})
+	BroadcastUpdate(c, "template_deleted", map[string]int64{"id": id})
 
 	return c.SendString("")
 }
@@ -197,7 +197,7 @@ func ApplyTemplate(c *fiber.Ctx) error {
 		return sendError(c, 400, "error.invalid_id")
 	}
 
-	activeList, err := db.GetActiveList()
+	activeList, err := db.GetActiveList(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.no_active_list")
 	}
@@ -212,7 +212,7 @@ func ApplyTemplate(c *fiber.Ctx) error {
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("template_applied", map[string]interface{}{
+	BroadcastUpdate(c, "template_applied", map[string]interface{}{
 		"template_id": templateID,
 		"list_id":     activeList.ID,
 	})
@@ -232,18 +232,18 @@ func CreateTemplateFromList(c *fiber.Ctx) error {
 
 	description := c.FormValue("description")
 
-	activeList, err := db.GetActiveList()
+	activeList, err := db.GetActiveList(WorkspaceID(c))
 	if err != nil {
 		return sendError(c, 500, "error.no_active_list")
 	}
 
-	template, err := db.CreateTemplateFromList(activeList.ID, name, description)
+	template, err := db.CreateTemplateFromList(WorkspaceID(c), activeList.ID, name, description)
 	if err != nil {
 		return sendError(c, 500, "error.create_failed")
 	}
 
 	// Broadcast to WebSocket clients
-	BroadcastUpdate("template_created", template)
+	BroadcastUpdate(c, "template_created", template)
 
 	// Return the new template partial
 	return c.Render("partials/template_item", fiber.Map{

@@ -92,7 +92,7 @@ func validOfflineUUID(value string) bool {
 
 // ApplyOfflineSync commits the mutations, temporary IDs, operation receipts and
 // optional webhook outbox records together. A lost HTTP response is safe to retry.
-func ApplyOfflineSync(request OfflineSyncRequest, hook OfflineItemHook) (*OfflineSyncResponse, error) {
+func ApplyOfflineSync(workspaceID int64, request OfflineSyncRequest, hook OfflineItemHook) (*OfflineSyncResponse, error) {
 	if !validOfflineUUID(request.ClientID) {
 		return nil, offlineInvalid("A valid client_id UUID is required")
 	}
@@ -106,7 +106,7 @@ func ApplyOfflineSync(request OfflineSyncRequest, hook OfflineItemHook) (*Offlin
 	defer tx.Rollback()
 	response := &OfflineSyncResponse{Results: make([]OfflineResult, 0, len(request.Operations))}
 	for _, operation := range request.Operations {
-		result, changed, err := applyOfflineOperation(tx, request.ClientID, operation, hook)
+		result, changed, err := applyOfflineOperation(tx, workspaceID, request.ClientID, operation, hook)
 		if err != nil {
 			var inputErr *OfflineError
 			if errors.As(err, &inputErr) {
@@ -117,7 +117,7 @@ func ApplyOfflineSync(request OfflineSyncRequest, hook OfflineItemHook) (*Offlin
 		response.Results = append(response.Results, result)
 		response.Changed = response.Changed || changed
 	}
-	response.Snapshot, err = offlineSnapshotTx(tx)
+	response.Snapshot, err = offlineSnapshotTx(tx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func ApplyOfflineSync(request OfflineSyncRequest, hook OfflineItemHook) (*Offlin
 	return response, nil
 }
 
-func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperation, hook OfflineItemHook) (OfflineResult, bool, error) {
+func applyOfflineOperation(tx *sql.Tx, workspaceID int64, clientID string, operation OfflineOperation, hook OfflineItemHook) (OfflineResult, bool, error) {
 	result := OfflineResult{ID: operation.ID, Entity: operation.Entity, EntityID: operation.EntityID}
 	if !validOfflineUUID(operation.ID) {
 		return result, false, offlineInvalid("A valid operation UUID is required")
@@ -183,7 +183,7 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 			if entity == "section" {
 				parentTable = "sections"
 			}
-			if exists, err := offlineEntityExists(tx, parentTable, parentID); err != nil {
+			if exists, err := offlineEntityExists(tx, workspaceID, parentTable, parentID); err != nil {
 				return result, false, err
 			} else if !exists {
 				return result, false, offlineConflict("The destination " + entity + " no longer exists")
@@ -194,7 +194,7 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 	if operation.Entity == "list" {
 		if name, supplied := values["name"]; supplied {
 			var count int
-			if err := tx.QueryRow("SELECT COUNT(*) FROM lists WHERE LOWER(name) = LOWER(?) AND id != ?", name, result.ServerID).Scan(&count); err != nil {
+			if err := tx.QueryRow("SELECT COUNT(*) FROM lists WHERE workspace_id = ? AND LOWER(name) = LOWER(?) AND id != ?", workspaceID, name, result.ServerID).Scan(&count); err != nil {
 				return result, false, err
 			}
 			if count > 0 {
@@ -206,21 +206,30 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 	completionChanged := false
 	var events []OfflineItemEvent
 	if operation.Action == "delete" {
-		if hook != nil {
+		owned, err := offlineEntityExists(tx, workspaceID, table, result.ServerID)
+		if err != nil {
+			return result, false, err
+		}
+		// An entity of another workspace is treated exactly like a missing one.
+		if hook != nil && owned {
 			events, err = offlineItemEvents(tx, operation.Entity, result.ServerID, "item.deleted")
 			if err != nil {
 				return result, false, err
 			}
 		}
-		deleted, err := tx.Exec("DELETE FROM "+table+" WHERE id = ?", result.ServerID)
-		if err != nil {
-			return result, false, err
+		// owned was just checked in this transaction, so the delete needs no
+		// second ownership subquery over the whole workspace.
+		if owned {
+			deleted, err := tx.Exec("DELETE FROM "+table+" WHERE id = ?", result.ServerID)
+			if err != nil {
+				return result, false, err
+			}
+			count, err := deleted.RowsAffected()
+			if err != nil {
+				return result, false, err
+			}
+			changed = count > 0
 		}
-		count, err := deleted.RowsAffected()
-		if err != nil {
-			return result, false, err
-		}
-		changed = count > 0
 	} else if operation.Action == "create" {
 		var existingID int64
 		err := tx.QueryRow("SELECT server_id FROM offline_entity_ids WHERE client_id = ? AND entity = ? AND temporary_id = ?", clientID, operation.Entity, operation.EntityID).Scan(&existingID)
@@ -233,6 +242,10 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 		if _, supplied := values["sort_order"]; !supplied {
 			query := "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM " + table
 			var args []interface{}
+			if operation.Entity == "list" {
+				query += " WHERE workspace_id = ?"
+				args = append(args, workspaceID)
+			}
 			if operation.Entity == "section" {
 				query += " WHERE list_id = ?"
 				args = append(args, values["list_id"])
@@ -254,6 +267,7 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 			if _, supplied := values["icon"]; !supplied {
 				values["icon"] = "🛒"
 			}
+			values["workspace_id"] = workspaceID
 		}
 		fields, args := offlineFields(values)
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(fields)), ",")
@@ -270,13 +284,13 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 		}
 		changed = true
 		if operation.Entity == "item" {
-			if _, err := tx.Exec(`INSERT INTO item_history (name, last_section_id, usage_count) VALUES (?, ?, 1)
-				ON CONFLICT(name) DO UPDATE SET usage_count = usage_count + 1, last_section_id = excluded.last_section_id, last_used_at = strftime('%s', 'now')`, values["name"], values["section_id"]); err != nil {
+			if _, err := tx.Exec(`INSERT INTO item_history (workspace_id, name, last_section_id, usage_count) VALUES (?, ?, ?, 1)
+				ON CONFLICT(workspace_id, name COLLATE NOCASE) DO UPDATE SET usage_count = usage_count + 1, last_section_id = excluded.last_section_id, last_used_at = strftime('%s', 'now')`, workspaceID, values["name"], values["section_id"]); err != nil {
 				return result, false, err
 			}
 		}
 	} else {
-		exists, err := offlineEntityExists(tx, table, result.ServerID)
+		exists, err := offlineEntityExists(tx, workspaceID, table, result.ServerID)
 		if err != nil {
 			return result, false, err
 		}
@@ -312,7 +326,7 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 	if operation.Entity == "list" && operation.Action != "delete" && values["is_active"] == true {
 		// Activating a list is exclusive, including when it is created offline.
 		// Receipt replays return earlier, so they cannot undo a later activation.
-		deactivated, err := tx.Exec("UPDATE lists SET is_active = FALSE, updated_at = strftime('%s', 'now') WHERE id != ? AND is_active = TRUE", result.ServerID)
+		deactivated, err := tx.Exec("UPDATE lists SET is_active = FALSE, updated_at = strftime('%s', 'now') WHERE id != ? AND is_active = TRUE AND workspace_id = ?", result.ServerID, workspaceID)
 		if err != nil {
 			return result, false, err
 		}
@@ -347,9 +361,24 @@ func applyOfflineOperation(tx *sql.Tx, clientID string, operation OfflineOperati
 	return result, changed, nil
 }
 
-func offlineEntityExists(tx *sql.Tx, table string, id int64) (bool, error) {
+// offlineOwnedSQL selects the IDs of a table's rows that belong to a workspace
+// (bind: workspace id). table comes from a fixed map, never from user input.
+func offlineOwnedSQL(table string) string {
+	switch table {
+	case "lists":
+		return "SELECT id FROM lists WHERE workspace_id = ?"
+	case "sections":
+		return "SELECT s.id FROM sections s JOIN lists l ON l.id = s.list_id WHERE l.workspace_id = ?"
+	default:
+		return "SELECT i.id FROM items i JOIN sections s ON s.id = i.section_id JOIN lists l ON l.id = s.list_id WHERE l.workspace_id = ?"
+	}
+}
+
+// offlineEntityExists reports whether the row exists inside the workspace.
+// Rows of other workspaces are indistinguishable from missing ones.
+func offlineEntityExists(tx *sql.Tx, workspaceID int64, table string, id int64) (bool, error) {
 	var exists bool
-	err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM "+table+" WHERE id = ?)", id).Scan(&exists)
+	err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM ("+offlineOwnedSQL(table)+") WHERE id = ?)", workspaceID, id).Scan(&exists)
 	return exists, err
 }
 
@@ -461,22 +490,22 @@ func validateOfflineValues(operation OfflineOperation) (map[string]interface{}, 
 	return values, nil
 }
 
-func GetOfflineSnapshot() (OfflineSnapshot, error) {
+func GetOfflineSnapshot(workspaceID int64) (OfflineSnapshot, error) {
 	tx, err := DB.Begin()
 	if err != nil {
 		return OfflineSnapshot{}, err
 	}
 	defer tx.Rollback()
-	snapshot, err := offlineSnapshotTx(tx)
+	snapshot, err := offlineSnapshotTx(tx, workspaceID)
 	if err != nil {
 		return snapshot, err
 	}
 	return snapshot, tx.Commit()
 }
 
-func offlineSnapshotTx(tx *sql.Tx) (OfflineSnapshot, error) {
+func offlineSnapshotTx(tx *sql.Tx, workspaceID int64) (OfflineSnapshot, error) {
 	snapshot := OfflineSnapshot{Lists: []List{}, Sections: []Section{}, Items: []Item{}}
-	rows, err := tx.Query(listSelectWithStats + " WHERE l.name != '[HISTORY]' GROUP BY l.id ORDER BY l.sort_order, l.id")
+	rows, err := tx.Query(listSelectWithStats+" WHERE l.workspace_id = ? AND l.name != '[HISTORY]' GROUP BY l.id ORDER BY l.sort_order, l.id", workspaceID)
 	if err != nil {
 		return snapshot, err
 	}
@@ -495,7 +524,7 @@ func offlineSnapshotTx(tx *sql.Tx) (OfflineSnapshot, error) {
 	}
 	rows, err = tx.Query(`SELECT s.id, s.list_id, s.name, s.sort_order, COALESCE(s.sort_mode, 'manual'), s.created_at, COALESCE(s.updated_at, 0)
 		FROM sections s JOIN lists l ON l.id = s.list_id
-		WHERE l.name != '[HISTORY]' AND s.name != '[HISTORY]' ORDER BY s.list_id, s.sort_order, s.id`)
+		WHERE l.workspace_id = ? AND l.name != '[HISTORY]' AND s.name != '[HISTORY]' ORDER BY s.list_id, s.sort_order, s.id`, workspaceID)
 	if err != nil {
 		return snapshot, err
 	}
@@ -508,7 +537,7 @@ func offlineSnapshotTx(tx *sql.Tx) (OfflineSnapshot, error) {
 	}
 	rows, err = tx.Query(`SELECT i.id, i.section_id, i.name, i.description, i.completed, i.uncertain, COALESCE(i.quantity, 0), i.sort_order, i.created_at, COALESCE(i.updated_at, 0)
 		FROM items i JOIN sections s ON s.id = i.section_id JOIN lists l ON l.id = s.list_id
-		WHERE l.name != '[HISTORY]' AND s.name != '[HISTORY]' ORDER BY i.section_id, i.sort_order, i.id`)
+		WHERE l.workspace_id = ? AND l.name != '[HISTORY]' AND s.name != '[HISTORY]' ORDER BY i.section_id, i.sort_order, i.id`, workspaceID)
 	if err != nil {
 		return snapshot, err
 	}

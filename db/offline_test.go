@@ -18,9 +18,6 @@ func initOfflineDatabase(t *testing.T) {
 	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "offline.db"))
 	Init()
 	t.Cleanup(Close)
-	if err := ClearAllData(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func offlineOperation(entity, action string, id int64, fields map[string]interface{}) OfflineOperation {
@@ -60,7 +57,7 @@ func TestOfflineAtomicCRUDAndLostAcknowledgement(t *testing.T) {
 		offlineOperation("list", "delete", -1, nil),
 	)
 	request := OfflineSyncRequest{ClientID: uuid.NewString(), Operations: operations}
-	response, err := ApplyOfflineSync(request, nil)
+	response, err := ApplyOfflineSync(DefaultWorkspaceID, request, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +83,7 @@ func TestOfflineAtomicCRUDAndLostAcknowledgement(t *testing.T) {
 	// create, update, move and delete with the original temporary references.
 	Close()
 	Init()
-	replayed, err := ApplyOfflineSync(request, nil)
+	replayed, err := ApplyOfflineSync(DefaultWorkspaceID, request, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +111,7 @@ func TestOfflineConflictRollsBackMutationsReceiptsMappingsAndHooks(t *testing.T)
 		_, err := tx.Exec("INSERT INTO webhook_outbox (event,payload) VALUES (?,?)", event.Event, []byte("test payload"))
 		return err
 	}
-	_, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: uuid.NewString(), Operations: operations}, hook)
+	_, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: uuid.NewString(), Operations: operations}, hook)
 	requireOfflineError(t, err, true, missingUpdate.ID)
 	for _, table := range []string{"lists", "sections", "items", "offline_operations", "offline_entity_ids", "item_history", "webhook_outbox"} {
 		var count int
@@ -130,18 +127,18 @@ func TestOfflineConflictRollsBackMutationsReceiptsMappingsAndHooks(t *testing.T)
 func TestOfflineTemporaryIDsAreScopedPerClientAndEntity(t *testing.T) {
 	initOfflineDatabase(t)
 	firstClient, secondClient := uuid.NewString(), uuid.NewString()
-	first, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: firstClient, Operations: offlineCreateTree()}, nil)
+	first, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: firstClient, Operations: offlineCreateTree()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	unknownParent := offlineOperation("section", "create", -2, map[string]interface{}{"name": "Wrong owner", "list_id": -1})
-	_, err = ApplyOfflineSync(OfflineSyncRequest{ClientID: secondClient, Operations: []OfflineOperation{unknownParent}}, nil)
+	_, err = ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: secondClient, Operations: []OfflineOperation{unknownParent}}, nil)
 	requireOfflineError(t, err, true, unknownParent.ID)
 	otherOperations := offlineCreateTree()
 	otherOperations[0].Values["name"] = json.RawMessage(`"Other shopper"`)
 	// Even the same operation UUID belongs to its own stable client ID.
 	otherOperations[0].ID = first.Results[0].ID
-	second, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: secondClient, Operations: otherOperations}, nil)
+	second, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: secondClient, Operations: otherOperations}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,17 +155,17 @@ func TestOfflineTemporaryIDsAreScopedPerClientAndEntity(t *testing.T) {
 func TestOfflineRejectsReusedOperationAndTemporaryIDs(t *testing.T) {
 	initOfflineDatabase(t)
 	request := OfflineSyncRequest{ClientID: uuid.NewString(), Operations: offlineCreateTree()}
-	if _, err := ApplyOfflineSync(request, nil); err != nil {
+	if _, err := ApplyOfflineSync(DefaultWorkspaceID, request, nil); err != nil {
 		t.Fatal(err)
 	}
 	changed := request.Operations[2]
 	changed.Values = map[string]json.RawMessage{"name": json.RawMessage(`"Cheese"`), "section_id": json.RawMessage(`-1`)}
-	_, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: request.ClientID, Operations: []OfflineOperation{changed}}, nil)
+	_, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: request.ClientID, Operations: []OfflineOperation{changed}}, nil)
 	requireOfflineError(t, err, true, changed.ID)
 	changed.ID = uuid.NewString()
-	_, err = ApplyOfflineSync(OfflineSyncRequest{ClientID: request.ClientID, Operations: []OfflineOperation{changed}}, nil)
+	_, err = ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: request.ClientID, Operations: []OfflineOperation{changed}}, nil)
 	requireOfflineError(t, err, true, changed.ID)
-	state, err := GetOfflineSnapshot()
+	state, err := GetOfflineSnapshot(DefaultWorkspaceID)
 	if err != nil || len(state.Items) != 1 || state.Items[0].Name != "Milk" {
 		t.Fatalf("reused IDs changed state: %#v, %v", state, err)
 	}
@@ -177,7 +174,7 @@ func TestOfflineRejectsReusedOperationAndTemporaryIDs(t *testing.T) {
 func TestOfflineSeparateBatchesExplicitCompletionAndIdempotentDelete(t *testing.T) {
 	initOfflineDatabase(t)
 	clientID := uuid.NewString()
-	created, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
+	created, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +183,7 @@ func TestOfflineSeparateBatchesExplicitCompletionAndIdempotentDelete(t *testing.
 		operation := offlineOperation("item", "update", -1, map[string]interface{}{"completed": completed})
 		request := OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{operation}}
 		for attempt := 0; attempt < 2; attempt++ {
-			response, err := ApplyOfflineSync(request, nil)
+			response, err := ApplyOfflineSync(DefaultWorkspaceID, request, nil)
 			if err != nil || response.Snapshot.Items[0].Completed != completed {
 				t.Fatalf("completion retry = %#v, %v", response, err)
 			}
@@ -198,20 +195,20 @@ func TestOfflineSeparateBatchesExplicitCompletionAndIdempotentDelete(t *testing.
 	for _, entity := range []string{"item", "section", "list"} {
 		operation := offlineOperation(entity, "delete", -1, nil)
 		request := OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{operation}}
-		if _, err := ApplyOfflineSync(request, nil); err != nil {
+		if _, err := ApplyOfflineSync(DefaultWorkspaceID, request, nil); err != nil {
 			t.Fatal(err)
 		}
 		// A fresh operation deleting the already missing row is safe too.
 		request.Operations[0].ID = uuid.NewString()
-		response, err := ApplyOfflineSync(request, nil)
+		response, err := ApplyOfflineSync(DefaultWorkspaceID, request, nil)
 		if err != nil || response.Changed {
 			t.Fatalf("duplicate deletion = %#v, %v", response, err)
 		}
 	}
 	missing := offlineOperation("item", "update", itemID, map[string]interface{}{"completed": true})
-	_, err = ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{missing}}, nil)
+	_, err = ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{missing}}, nil)
 	requireOfflineError(t, err, true, missing.ID)
-	snapshot, err := GetOfflineSnapshot()
+	snapshot, err := GetOfflineSnapshot(DefaultWorkspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +221,7 @@ func TestOfflineSeparateBatchesExplicitCompletionAndIdempotentDelete(t *testing.
 func TestOfflineValidationRejectsInvalidFieldsAndReferences(t *testing.T) {
 	initOfflineDatabase(t)
 	clientID := uuid.NewString()
-	created, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
+	created, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,11 +256,11 @@ func TestOfflineValidationRejectsInvalidFieldsAndReferences(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			index := map[string]int{"list": 0, "section": 1, "item": 2}[test.entity]
 			operation := offlineOperation(test.entity, "update", created.Results[index].ServerID, map[string]interface{}{test.field: test.value})
-			_, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{operation}}, nil)
+			_, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{operation}}, nil)
 			requireOfflineError(t, err, test.conflict, operation.ID)
 		})
 	}
-	after, err := GetOfflineSnapshot()
+	after, err := GetOfflineSnapshot(DefaultWorkspaceID)
 	if err != nil || !reflect.DeepEqual(created.Snapshot, after) {
 		t.Fatalf("invalid changes mutated state: %#v, %v", after, err)
 	}
@@ -283,12 +280,12 @@ func TestOfflineBatchEnvelopeAndCreateValidation(t *testing.T) {
 		offlineOperation("item", "toggle", 1, nil),
 	}
 	for _, operation := range invalid {
-		_, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: uuid.NewString(), Operations: []OfflineOperation{operation}}, nil)
+		_, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: uuid.NewString(), Operations: []OfflineOperation{operation}}, nil)
 		requireOfflineError(t, err, false, operation.ID)
 	}
-	_, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: "not-a-uuid"}, nil)
+	_, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: "not-a-uuid"}, nil)
 	requireOfflineError(t, err, false, "")
-	_, err = ApplyOfflineSync(OfflineSyncRequest{ClientID: uuid.NewString(), Operations: make([]OfflineOperation, MaxOfflineOperations+1)}, nil)
+	_, err = ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: uuid.NewString(), Operations: make([]OfflineOperation, MaxOfflineOperations+1)}, nil)
 	requireOfflineError(t, err, false, "")
 }
 
@@ -300,13 +297,13 @@ func TestOfflineConcurrentRetryCreatesOnlyOnce(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			if _, err := ApplyOfflineSync(request, nil); err != nil {
+			if _, err := ApplyOfflineSync(DefaultWorkspaceID, request, nil); err != nil {
 				t.Errorf("concurrent retry: %v", err)
 			}
 		}()
 	}
 	wait.Wait()
-	state, err := GetOfflineSnapshot()
+	state, err := GetOfflineSnapshot(DefaultWorkspaceID)
 	if err != nil || len(state.Lists) != 1 || len(state.Sections) != 1 || len(state.Items) != 1 {
 		t.Fatalf("concurrent retry duplicated entities: %#v, %v", state, err)
 	}
@@ -318,21 +315,21 @@ func TestOfflineWebhookHooksPreserveCascadeContextAndReplayOnce(t *testing.T) {
 	hook := func(_ *sql.Tx, event OfflineItemEvent) error { captured = append(captured, event); return nil }
 	clientID := uuid.NewString()
 	request := OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}
-	if _, err := ApplyOfflineSync(request, hook); err != nil {
+	if _, err := ApplyOfflineSync(DefaultWorkspaceID, request, hook); err != nil {
 		t.Fatal(err)
 	}
 	complete := offlineOperation("item", "update", -1, map[string]interface{}{"completed": true})
-	if _, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{complete}}, hook); err != nil {
+	if _, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{complete}}, hook); err != nil {
 		t.Fatal(err)
 	}
 	// Editing an already completed item emits updated, not completed again.
 	edit := offlineOperation("item", "update", -1, map[string]interface{}{"completed": true, "description": "Organic"})
 	deletion := offlineOperation("list", "delete", -1, nil)
 	request.Operations = []OfflineOperation{edit, deletion}
-	if _, err := ApplyOfflineSync(request, hook); err != nil {
+	if _, err := ApplyOfflineSync(DefaultWorkspaceID, request, hook); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ApplyOfflineSync(request, hook); err != nil {
+	if _, err := ApplyOfflineSync(DefaultWorkspaceID, request, hook); err != nil {
 		t.Fatal(err)
 	}
 	if len(captured) != 4 {
@@ -349,12 +346,12 @@ func TestOfflineSectionMoveKeepsChildrenAndListNamesRemainUnique(t *testing.T) {
 	initOfflineDatabase(t)
 	clientID := uuid.NewString()
 	operations := append(offlineCreateTree(), offlineOperation("list", "create", -2, map[string]interface{}{"name": "Destination"}))
-	created, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: operations}, nil)
+	created, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: operations}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	move := offlineOperation("section", "update", -1, map[string]interface{}{"list_id": -2})
-	response, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{move}}, nil)
+	response, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{move}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,14 +359,14 @@ func TestOfflineSectionMoveKeepsChildrenAndListNamesRemainUnique(t *testing.T) {
 		t.Fatalf("moving a section lost its items: %#v", response.Snapshot)
 	}
 	duplicate := offlineOperation("list", "update", -2, map[string]interface{}{"name": "weekly"})
-	_, err = ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{duplicate}}, nil)
+	_, err = ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{duplicate}}, nil)
 	requireOfflineError(t, err, true, duplicate.ID)
 }
 
 func TestOfflineUnchangedPatchPreservesVersionAndDoesNotEmitWebhook(t *testing.T) {
 	initOfflineDatabase(t)
 	clientID := uuid.NewString()
-	created, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
+	created, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +375,7 @@ func TestOfflineUnchangedPatchPreservesVersionAndDoesNotEmitWebhook(t *testing.T
 	}
 	noOp := offlineOperation("item", "update", -1, map[string]interface{}{"completed": false, "name": "Milk", "quantity": 0})
 	hook := func(_ *sql.Tx, _ OfflineItemEvent) error { t.Error("unchanged patch emitted webhook"); return nil }
-	response, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{noOp}}, hook)
+	response, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{noOp}}, hook)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +387,7 @@ func TestOfflineUnchangedPatchPreservesVersionAndDoesNotEmitWebhook(t *testing.T
 func TestOfflineDuplicateOperationInOneBatchCreatesOnlyOnce(t *testing.T) {
 	initOfflineDatabase(t)
 	operation := offlineOperation("list", "create", -1, map[string]interface{}{"name": "Shopping"})
-	response, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: uuid.NewString(), Operations: []OfflineOperation{operation, operation}}, nil)
+	response, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: uuid.NewString(), Operations: []OfflineOperation{operation, operation}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +401,7 @@ func TestOfflineListActivationIsExclusiveAndReplayPreservesLaterSelection(t *tes
 	clientID := uuid.NewString()
 	first := offlineOperation("list", "create", -1, map[string]interface{}{"name": "First", "is_active": true})
 	second := offlineOperation("list", "create", -2, map[string]interface{}{"name": "Second", "is_active": true})
-	created, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{first, second}}, nil)
+	created, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{first, second}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,13 +419,13 @@ func TestOfflineListActivationIsExclusiveAndReplayPreservesLaterSelection(t *tes
 	}
 	assertActive(created.Snapshot, created.Results[1].ServerID)
 	activation := offlineOperation("list", "update", -1, map[string]interface{}{"is_active": true})
-	updated, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{activation}}, nil)
+	updated, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{activation}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertActive(updated.Snapshot, created.Results[0].ServerID)
 	// Retrying an older create must not make that list active again.
-	retried, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{second}}, nil)
+	retried, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{second}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,9 +435,9 @@ func TestOfflineListActivationIsExclusiveAndReplayPreservesLaterSelection(t *tes
 	assertActive(retried.Snapshot, created.Results[0].ServerID)
 	missing := offlineOperation("item", "update", 999999, map[string]interface{}{"name": "Missing"})
 	failedActivation := offlineOperation("list", "update", -2, map[string]interface{}{"is_active": true})
-	_, err = ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{failedActivation, missing}}, nil)
+	_, err = ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{failedActivation, missing}}, nil)
 	requireOfflineError(t, err, true, missing.ID)
-	after, err := GetOfflineSnapshot()
+	after, err := GetOfflineSnapshot(DefaultWorkspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,12 +447,12 @@ func TestOfflineListActivationIsExclusiveAndReplayPreservesLaterSelection(t *tes
 func TestOfflineSnapshotExcludesReservedHistoryContainersAndCounters(t *testing.T) {
 	initOfflineDatabase(t)
 	clientID := uuid.NewString()
-	created, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
+	created, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: offlineCreateTree()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a legacy imported database that predates reserved-name checks.
-	historyList, err := CreateList("[HISTORY]", "cart")
+	historyList, err := CreateList(DefaultWorkspaceID, "[HISTORY]", "cart")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,12 +479,12 @@ func TestOfflineSnapshotExcludesReservedHistoryContainersAndCounters(t *testing.
 			t.Fatalf("history data leaked into shopping snapshot or counters: %#v", snapshot)
 		}
 	}
-	snapshot, err := GetOfflineSnapshot()
+	snapshot, err := GetOfflineSnapshot(DefaultWorkspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertSnapshot(snapshot)
-	replayed, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID}, nil)
+	replayed, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,13 +503,13 @@ func TestOfflineDefaultSortOrderCannotExceedJavaScriptSafeInteger(t *testing.T) 
 	initOfflineDatabase(t)
 	clientID := uuid.NewString()
 	maximum := offlineOperation("list", "create", -1, map[string]interface{}{"name": "Maximum", "sort_order": maxOfflineInteger})
-	if _, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{maximum}}, nil); err != nil {
+	if _, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{maximum}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	appendList := offlineOperation("list", "create", -2, map[string]interface{}{"name": "After maximum"})
-	_, err := ApplyOfflineSync(OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{appendList}}, nil)
+	_, err := ApplyOfflineSync(DefaultWorkspaceID, OfflineSyncRequest{ClientID: clientID, Operations: []OfflineOperation{appendList}}, nil)
 	requireOfflineError(t, err, true, appendList.ID)
-	snapshot, err := GetOfflineSnapshot()
+	snapshot, err := GetOfflineSnapshot(DefaultWorkspaceID)
 	if err != nil || len(snapshot.Lists) != 1 {
 		t.Fatalf("unsafe default order was saved: %#v, %v", snapshot, err)
 	}

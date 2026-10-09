@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"shopping-list/db"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +22,8 @@ func (writer *stalledWebSocketWriter) SetWriteDeadline(deadline time.Time) error
 	writer.deadline = deadline
 	return nil
 }
-func (writer *stalledWebSocketWriter) WriteJSON(interface{}) error { return nil }
+func (writer *stalledWebSocketWriter) SetReadDeadline(time.Time) error { return nil }
+func (writer *stalledWebSocketWriter) WriteJSON(interface{}) error     { return nil }
 func (writer *stalledWebSocketWriter) WriteMessage(int, []byte) error {
 	writer.start.Do(func() { close(writer.started) })
 	<-writer.closed
@@ -37,6 +39,7 @@ type recordingWebSocketWriter struct {
 }
 
 func (writer *recordingWebSocketWriter) SetWriteDeadline(time.Time) error { return nil }
+func (writer *recordingWebSocketWriter) SetReadDeadline(time.Time) error  { return nil }
 func (writer *recordingWebSocketWriter) WriteJSON(interface{}) error      { return nil }
 func (writer *recordingWebSocketWriter) Close() error                     { return nil }
 func (writer *recordingWebSocketWriter) WriteMessage(_ int, data []byte) error {
@@ -56,8 +59,10 @@ func waitForWebSocketSignal(t *testing.T, signal <-chan struct{}, failure string
 func TestStalledWebSocketDoesNotBlockBroadcastOrHealthyClient(t *testing.T) {
 	stalledWriter := &stalledWebSocketWriter{started: make(chan struct{}), closed: make(chan struct{})}
 	stalled := newWebSocketClient(stalledWriter)
+	stalled.workspaceID = db.DefaultWorkspaceID
 	healthyWriter := &recordingWebSocketWriter{messages: make(chan []byte, 2)}
 	healthy := newWebSocketClient(healthyWriter)
+	healthy.workspaceID = db.DefaultWorkspaceID
 	clientsMu.Lock()
 	originalClients := clients
 	clients = map[*websocket.Conn]*webSocketClient{nil: stalled, new(websocket.Conn): healthy}
@@ -81,7 +86,7 @@ func TestStalledWebSocketDoesNotBlockBroadcastOrHealthyClient(t *testing.T) {
 	}
 	returned := make(chan struct{})
 	go func() {
-		BroadcastUpdate("item_toggled", map[string]int{"id": 42})
+		broadcast(db.DefaultWorkspaceID, "item_toggled", map[string]int{"id": 42})
 		close(returned)
 	}()
 	waitForWebSocketSignal(t, returned, "broadcast blocked behind suspended client")

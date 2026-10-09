@@ -107,9 +107,18 @@ func ClearDatabase(c *fiber.Ctx) error {
 		})
 	}
 
-	// Clear all data
-	preparedWebhooks := PrepareAllItemWebhooks(webhook.EventItemDeleted)
-	if err := db.ClearAllData(); err != nil {
+	// Clearing removes a whole workspace's data, so with accounts only its
+	// owners (or an administrator) may do it.
+	if user := CurrentUser(c); MultiUser() && (user == nil || !canManage(user, WorkspaceID(c))) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"success": false,
+			"error":   "forbidden",
+		})
+	}
+
+	// Clear the current workspace's data only
+	preparedWebhooks := PrepareAllItemWebhooks(WorkspaceID(c), webhook.EventItemDeleted)
+	if err := db.ClearWorkspaceData(WorkspaceID(c)); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
 			"error":   "Failed to clear database: " + err.Error(),
@@ -117,7 +126,7 @@ func ClearDatabase(c *fiber.Ctx) error {
 	}
 
 	// Broadcast update to all connected clients
-	BroadcastUpdate("database_cleared", nil)
+	BroadcastUpdate(c, "database_cleared", nil)
 	NotifyPreparedItemWebhooks(webhook.EventItemDeleted, preparedWebhooks)
 
 	return c.JSON(fiber.Map{

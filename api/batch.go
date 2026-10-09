@@ -98,7 +98,7 @@ func batchCreateNewList(c *fiber.Ctx, req BatchCreateRequest) error {
 
 	// Create list
 	icon := NormalizeIcon(req.List.Icon)
-	list, err := db.CreateListTx(tx, req.List.Name, icon)
+	list, err := db.CreateListTx(tx, handlers.WorkspaceID(c), req.List.Name, icon)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error:   "create_failed",
@@ -132,7 +132,7 @@ func batchCreateNewList(c *fiber.Ctx, req BatchCreateRequest) error {
 			items = append(items, *item)
 
 			// Save to item history
-			db.SaveItemHistoryTx(tx, itemInput.Name, section.ID)
+			db.SaveItemHistoryTx(tx, handlers.WorkspaceID(c), itemInput.Name, section.ID)
 		}
 
 		section.Items = sectionItems
@@ -151,7 +151,7 @@ func batchCreateNewList(c *fiber.Ctx, req BatchCreateRequest) error {
 	list.Stats = db.GetListStats(list.ID)
 
 	// Broadcast WebSocket update
-	handlers.BroadcastUpdate("batch_created", map[string]interface{}{
+	handlers.BroadcastUpdate(c, "batch_created", map[string]interface{}{
 		"list_id": list.ID,
 	})
 	handlers.NotifyItemWebhooks(webhook.EventItemCreated, items)
@@ -166,7 +166,7 @@ func batchCreateNewList(c *fiber.Ctx, req BatchCreateRequest) error {
 // batchAddToList adds sections and items to an existing list
 func batchAddToList(c *fiber.Ctx, req BatchCreateRequest) error {
 	// Check if list exists
-	_, err := db.GetListByID(req.ListID)
+	_, err := ownedList(c, req.ListID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
@@ -248,7 +248,7 @@ func batchAddToList(c *fiber.Ctx, req BatchCreateRequest) error {
 			sectionItems = append(sectionItems, *item)
 			items = append(items, *item)
 
-			db.SaveItemHistoryTx(tx, itemInput.Name, section.ID)
+			db.SaveItemHistoryTx(tx, handlers.WorkspaceID(c), itemInput.Name, section.ID)
 		}
 
 		section.Items = sectionItems
@@ -264,7 +264,7 @@ func batchAddToList(c *fiber.Ctx, req BatchCreateRequest) error {
 	}
 
 	// Broadcast WebSocket update
-	handlers.BroadcastUpdate("batch_created", map[string]interface{}{
+	handlers.BroadcastUpdate(c, "batch_created", map[string]interface{}{
 		"list_id": req.ListID,
 	})
 	handlers.NotifyItemWebhooks(webhook.EventItemCreated, items)
@@ -278,7 +278,7 @@ func batchAddToList(c *fiber.Ctx, req BatchCreateRequest) error {
 // batchAddToSection adds items to an existing section
 func batchAddToSection(c *fiber.Ctx, req BatchCreateRequest) error {
 	// Check if section exists
-	_, err := db.GetSectionByID(req.SectionID)
+	_, err := ownedSection(c, req.SectionID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
@@ -334,7 +334,7 @@ func batchAddToSection(c *fiber.Ctx, req BatchCreateRequest) error {
 		}
 		items = append(items, *item)
 
-		db.SaveItemHistoryTx(tx, itemInput.Name, req.SectionID)
+		db.SaveItemHistoryTx(tx, handlers.WorkspaceID(c), itemInput.Name, req.SectionID)
 	}
 
 	// Commit transaction
@@ -346,7 +346,7 @@ func batchAddToSection(c *fiber.Ctx, req BatchCreateRequest) error {
 	}
 
 	// Broadcast WebSocket update
-	handlers.BroadcastUpdate("batch_created", map[string]interface{}{
+	handlers.BroadcastUpdate(c, "batch_created", map[string]interface{}{
 		"section_id": req.SectionID,
 	})
 	handlers.NotifyItemWebhooks(webhook.EventItemCreated, items)
