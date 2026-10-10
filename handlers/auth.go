@@ -147,20 +147,20 @@ func Login(c *fiber.Ctx) error {
 	var err error
 	if user != nil {
 		workspaceID, _ := db.ResolveSessionWorkspace(user.ID, 0)
-		err = db.CreateUserSession(sessionID, expiresAt, user.ID, workspaceID)
+		err = db.CreateUserSession(sessionID, expiresAt.Unix(), user.ID, workspaceID)
 	} else {
-		err = db.CreateSession(sessionID, expiresAt)
+		err = db.CreateSession(sessionID, expiresAt.Unix())
 	}
 	if err != nil {
 		return sendError(c, 500, "error.session_failed")
 	}
-	log.Printf("[AUTH] New session created: %s... (expires: %d)", sessionIDPrefix(sessionID), expiresAt)
+	log.Printf("[AUTH] New session created: %s... (expires: %d)", sessionIDPrefix(sessionID), expiresAt.Unix())
 
 	// Set cookie
 	c.Cookie(&fiber.Cookie{
 		Name:     SessionCookieName,
 		Value:    sessionID,
-		Expires:  time.Now().Add(SessionDuration),
+		Expires:  expiresAt,
 		HTTPOnly: true,
 		Secure:   isSecureConnection(c),
 		SameSite: "Lax",
