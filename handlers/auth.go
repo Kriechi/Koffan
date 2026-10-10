@@ -17,12 +17,36 @@ import (
 )
 
 const (
-	SessionCookieName = "session"
-	SessionDuration   = 7 * 24 * time.Hour // 7 days
+	SessionCookieName      = "session"
+	DefaultSessionDuration = 7 * 24 * time.Hour // 7 days
 )
 
 // DefaultPassword is used when APP_PASSWORD is unset (development only).
 const DefaultPassword = "shopping123"
+
+func getSessionDuration() time.Duration {
+	duration := os.Getenv("SESSION_DURATION")
+	if duration == "" {
+		return DefaultSessionDuration
+	}
+	d, err := parseSessionDuration(duration)
+	if err != nil {
+		log.Printf("Invalid SESSION_DURATION: %s", duration)
+		return DefaultSessionDuration
+	}
+	return d
+}
+
+func parseSessionDuration(value string) (time.Duration, error) {
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(value, "d"))
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(value)
+}
 
 func getAppPassword() string {
 	pass := os.Getenv("APP_PASSWORD")
@@ -118,7 +142,7 @@ func Login(c *fiber.Ctx) error {
 
 	// Create session
 	sessionID := generateSessionID()
-	expiresAt := time.Now().Add(SessionDuration).Unix()
+	expiresAt := time.Now().Add(getSessionDuration())
 
 	var err error
 	if user != nil {
